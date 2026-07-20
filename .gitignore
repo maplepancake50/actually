@@ -1,0 +1,6 @@
+# Keep generated artwork experiments local; publish only textures used by the addon.
+Textures/*
+!Textures/NerdFace.png
+!Textures/NerdFace.tga
+!Textures/ActuallyPet.png
+!Textures/ActuallyPet.tga
