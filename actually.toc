@@ -1,0 +1,11 @@
+## Interface: 30300
+## Title: actually
+## Notes: Draggable utility-spell tier board prototype for Ascension Season 10 caches.
+## Author: Luke
+## Version: 0.1.0
+## SavedVariables: ActuallyDB
+
+Core.lua
+TierBoard.lua
+MinimapButton.lua
+Pet.lua
