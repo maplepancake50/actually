@@ -362,19 +362,20 @@ function Official:RecordBoardChange(action, newBoard, changedKeys, author)
     end
 
     local madeOperation = false
+    local createdOperations = {}
     for _, key in ipairs(changedKeys) do
         key = tostring(key)
         local tier, index = FindPlacement(newBoard, key)
         if tier then
             local row = newBoard[tier]
-            self:NewOperation("MOVE", {
+            table.insert(createdOperations, self:NewOperation("MOVE", {
                 key = key,
                 tier = tier,
                 before = row[index + 1],
                 after = row[index - 1],
-            }, author)
+            }, author))
         else
-            self:NewOperation("REMOVE", { key = key }, author)
+            table.insert(createdOperations, self:NewOperation("REMOVE", { key = key }, author))
         end
         madeOperation = true
     end
@@ -383,8 +384,9 @@ function Official:RecordBoardChange(action, newBoard, changedKeys, author)
     end
 
     self:RebuildBoard()
-    self:AddAuditEntry(action, author, false)
+    local auditEntry = self:AddAuditEntry(action, author, false)
     if Addon.Sync then
+        Addon.Sync:BroadcastOfficialChange(createdOperations, auditEntry)
         Addon.Sync:MarkDirty(true)
     end
     return true
@@ -394,10 +396,11 @@ function Official:RecordBoardReset(action, author)
     if not self:IsOfficer() then
         return false
     end
-    self:NewOperation("RESET", nil, author)
+    local operation = self:NewOperation("RESET", nil, author)
     self:RebuildBoard()
-    self:AddAuditEntry(action, author, false)
+    local auditEntry = self:AddAuditEntry(action, author, false)
     if Addon.Sync then
+        Addon.Sync:BroadcastOfficialChange({ operation }, auditEntry)
         Addon.Sync:MarkDirty(true)
     end
     return true

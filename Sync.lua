@@ -15,6 +15,7 @@ local MAX_RETRIES = 2
 local REQUEST_COOLDOWN = 25
 local CHUNK_SIZE = 180
 local MAX_TRANSFER_CHUNKS = 2000
+local MAX_LIVE_PAYLOAD = 240
 -- Development fallback for cross-guild testing. Production discovery is GUILD.
 local BOOTSTRAP_PEERS = { "Bolty" }
 
@@ -222,6 +223,15 @@ end
 function Sync:Invalidate()
     self.cachedSnapshot = nil
     self.cachedDigest = nil
+end
+
+function Sync:RefreshUI()
+    if Addon.Board and Addon.Board.frame then
+        Addon.Board:ReloadFromDatabase()
+    end
+    if Addon.Discussion then
+        Addon.Discussion:Refresh()
+    end
 end
 
 function Sync:Log(message)
@@ -519,12 +529,7 @@ function Sync:ApplySnapshot(snapshot)
 
     self:Invalidate()
     if changed then
-        if Addon.Board and Addon.Board.frame then
-            Addon.Board:ReloadFromDatabase()
-        end
-        if Addon.Discussion then
-            Addon.Discussion:Refresh()
-        end
+        self:RefreshUI()
     end
     self:Log(changed and "Snapshot merged and UI refreshed." or "Snapshot received; local data was already current.")
     return changed, true
@@ -587,6 +592,35 @@ function Sync:BroadcastLive(message)
     for _, peer in pairs(self.peers) do
         if IsActivePeer(peer, now) then
             self:QueueMessage(message, "WHISPER", peer.name)
+        end
+    end
+end
+
+function Sync:BroadcastOfficialChange(operations, auditEntry)
+    if not self.initialized then
+        return
+    end
+    for _, operation in ipairs(operations or {}) do
+        local payload = table.concat({
+            "SYNC", "O", Encode(operation.id), tostring(tonumber(operation.clock) or 0),
+            Encode(operation.author), tostring(tonumber(operation.timestamp) or 0), Encode(operation.kind),
+            Encode(operation.key), Encode(operation.tier), Encode(operation.before), Encode(operation.after),
+        }, "|")
+        if string.len(payload) <= MAX_LIVE_PAYLOAD then
+            self:BroadcastLive(payload)
+        else
+            self:Log("Official operation exceeded the live-message limit; snapshot recovery will deliver it.")
+        end
+    end
+    if auditEntry then
+        local payload = table.concat({
+            "SYNC", "J", Encode(auditEntry.id), tostring(tonumber(auditEntry.revision) or 0),
+            Encode(auditEntry.author), tostring(tonumber(auditEntry.timestamp) or 0), Encode(auditEntry.action),
+        }, "|")
+        if string.len(payload) <= MAX_LIVE_PAYLOAD then
+            self:BroadcastLive(payload)
+        else
+            self:Log("Official audit entry exceeded the live-message limit; snapshot recovery will deliver it.")
         end
     end
 end
@@ -814,6 +848,75 @@ function Sync:HandleHello(sender, channel, digest)
     end
 end
 
+function Sync:ApplyLiveOfficialOperation(rest, sender)
+    local id, clock, author, timestamp, kind, key, tier, before, after = string.match(
+        rest or "", "^([^|]+)|(%d+)|([^|]*)|(%d+)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)$"
+    )
+    id, author, kind = Decode(id), Decode(author), Decode(kind)
+    if id == "" or (kind ~= "MOVE" and kind ~= "REMOVE" and kind ~= "RESET") then
+        return false
+    end
+    local operation = {
+        id = id,
+        clock = tonumber(clock) or 0,
+        author = author,
+        timestamp = tonumber(timestamp) or 0,
+        kind = kind,
+        key = Decode(key),
+        tier = Decode(tier),
+        before = Decode(before),
+        after = Decode(after),
+    }
+    local official = Addon.Official:EnsureOperationState()
+    local existing = official.operations[id]
+    if existing and OperationSignature(existing) >= OperationSignature(operation) then
+        return false
+    end
+    official.operations[id] = operation
+    official.operationClock = math.max(tonumber(official.operationClock) or 0, operation.clock)
+    Addon.Official:RebuildBoard()
+    self:Invalidate()
+    self:RefreshUI()
+    self:Log("Applied live official operation from " .. ShortName(sender) .. ".")
+    return true
+end
+
+function Sync:ApplyLiveAudit(rest)
+    local id, revision, author, timestamp, action = string.match(rest or "", "^([^|]+)|(%d+)|([^|]*)|(%d+)|(.*)$")
+    id = Decode(id)
+    if id == "" then
+        return false
+    end
+    local official = Addon.db.lists.official
+    official.audit = type(official.audit) == "table" and official.audit or {}
+    for _, entry in ipairs(official.audit) do
+        if entry.id == id then
+            return false
+        end
+    end
+    table.insert(official.audit, {
+        id = id,
+        revision = tonumber(revision) or tonumber(official.revision) or 0,
+        author = Decode(author),
+        timestamp = tonumber(timestamp) or 0,
+        action = Decode(action),
+    })
+    table.sort(official.audit, function(left, right)
+        if (left.timestamp or 0) ~= (right.timestamp or 0) then
+            return (left.timestamp or 0) < (right.timestamp or 0)
+        end
+        return tostring(left.id) < tostring(right.id)
+    end)
+    while #official.audit > 100 do
+        table.remove(official.audit, 1)
+    end
+    self:Invalidate()
+    if Addon.Board then
+        Addon.Board:RefreshAuditLog()
+    end
+    return true
+end
+
 function Sync:HandleMessage(message, channel, sender)
     local kind, rest = string.match(message or "", "^SYNC|([^|]+)|(.*)$")
     if not kind then
@@ -832,11 +935,16 @@ function Sync:HandleMessage(message, channel, sender)
         if tonumber(protocol) == PROTOCOL then
             self:HandleHello(sender, channel, digest)
         end
+    elseif kind == "O" then
+        self:ApplyLiveOfficialOperation(rest, sender)
+    elseif kind == "J" then
+        self:ApplyLiveAudit(rest)
     elseif kind == "U" then
         local key = PeerKey(sender)
         self.peers[key] = { name = sender, lastSeen = Now(), digest = rest }
         self:Log("Update notice from " .. ShortName(sender) .. ".")
-        if self:GetLeader() == self.selfKey then
+        local _, ownDigest = self:GetSnapshot()
+        if self:GetLeader() == self.selfKey and rest ~= ownDigest then
             self:RequestSnapshot(sender)
         end
     elseif kind == "L" then
