@@ -1,0 +1,4 @@
+# Keep generated logo experiments local; publish only the textures used by the addon.
+actually/Textures/*
+!actually/Textures/NerdFace.png
+!actually/Textures/NerdFace.tga
