@@ -649,8 +649,7 @@ function Board:CreateCard(spell)
         if self.spell.coa then
             GameTooltip:AddLine("COA", 1, 0.76, 0.18)
         end
-        GameTooltip:AddLine("Drag to another row or position.", 0.55, 0.9, 0.55)
-        GameTooltip:AddLine("Right-click for spell options.", 0.85, 0.70, 0.35)
+
         GameTooltip:Show()
     end)
     card:SetScript("OnLeave", function()

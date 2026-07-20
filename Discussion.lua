@@ -149,7 +149,7 @@ local function GetRow(area, index)
 
     row.body = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     row.body:SetPoint("TOPLEFT", row.author, "BOTTOMLEFT", 0, -4)
-    row.body:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+    row.body:SetPoint("TOPRIGHT", row, "TOPRIGHT", -8, -27)
     row.body:SetJustifyH("LEFT")
     row.body:SetJustifyV("TOP")
 
@@ -164,6 +164,7 @@ local function RefreshRows(area, entries, officerRows)
 
     if #entries == 0 then
         local row = GetRow(area, 1)
+        row:ClearAllPoints()
         row:SetPoint("TOPLEFT", area.canvas, "TOPLEFT", 0, 0)
         row.author:SetText(officerRows and "No officer reasoning yet." or "No community discussion yet.")
         row.author:SetTextColor(0.6, 0.6, 0.65)
@@ -306,7 +307,7 @@ function Discussion:Create()
     priorityInput:SetAutoFocus(false)
     priorityInput:SetMaxLetters(MAX_TEXT_LENGTH)
     priorityInput:SetTextInsets(7, 7, 7, 7)
-    priorityInput:SetFontObject("GameFontHighlightSmall")
+    priorityInput:SetFontObject(GameFontHighlightSmall)
     SetBackdrop(priorityInput, { 0.07, 0.05, 0.02, 0.94 }, { 0.60, 0.43, 0.10, 1 })
     self.priorityInput = priorityInput
 
@@ -342,7 +343,7 @@ function Discussion:Create()
     communityInput:SetAutoFocus(false)
     communityInput:SetMaxLetters(MAX_TEXT_LENGTH)
     communityInput:SetTextInsets(7, 7, 7, 7)
-    communityInput:SetFontObject("GameFontHighlightSmall")
+    communityInput:SetFontObject(GameFontHighlightSmall)
     SetBackdrop(communityInput, { 0.04, 0.05, 0.07, 0.96 }, { 0.16, 0.40, 0.55, 1 })
     self.communityInput = communityInput
 
