@@ -10,6 +10,7 @@ Official.lua
 Discussion.lua
 TierBoard.lua
 BatchCapture.lua
+Gear.lua
 Sync.lua
 MinimapButton.lua
 Pet.lua

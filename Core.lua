@@ -62,13 +62,17 @@ function Util.SetBackdrop(frame, color, borderColor)
 end
 
 local defaults = {
-    version = 8,
+    version = 9,
     customSpells = {},
     spellTombstones = {},
     sync = {
         knownPeers = {},
     },
     discussions = {},
+    gear = {
+        sets = {},
+        tombstones = {},
+    },
     authority = {
         officers = {},
     },
@@ -171,6 +175,9 @@ local function InitializeListStorage(db)
     db.authority = CopyDefaults(defaults.authority, db.authority)
     db.authority.officers = type(db.authority.officers) == "table" and db.authority.officers or {}
     db.discussions = type(db.discussions) == "table" and db.discussions or {}
+    db.gear = type(db.gear) == "table" and db.gear or {}
+    db.gear.sets = type(db.gear.sets) == "table" and db.gear.sets or {}
+    db.gear.tombstones = type(db.gear.tombstones) == "table" and db.gear.tombstones or {}
     db.spellTombstones = type(db.spellTombstones) == "table" and db.spellTombstones or {}
     db.sync = type(db.sync) == "table" and db.sync or {}
     db.sync.knownPeers = type(db.sync.knownPeers) == "table" and db.sync.knownPeers or {}
@@ -202,7 +209,7 @@ local function InitializeListStorage(db)
     end
 
     db.board = nil
-    db.version = 8
+    db.version = 9
 end
 
 function Addon:GetActiveList()

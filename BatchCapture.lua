@@ -66,7 +66,7 @@ function BatchCapture:CaptureText(text)
             table.insert(ids, spellID)
         end
     end
-    if #ids == 0 then
+    if #ids == 0 and not string.find(text, "item:", 1, true) then
         for idText in string.gmatch(text, "%d+") do
             local spellID = tonumber(idText)
             if spellID and not found[spellID] then

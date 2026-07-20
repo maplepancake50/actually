@@ -7,7 +7,7 @@ local ShortName = Addon.Util.ShortName
 local NormalizeCharacter = Addon.Util.NormalizeCharacter
 
 local PREFIX = Addon.MESSAGE_PREFIX
-local PROTOCOL = 2
+local PROTOCOL = 3
 local HEARTBEAT_INTERVAL = 30
 local PEER_TIMEOUT = 75
 local RETRY_INTERVAL = 10
@@ -157,6 +157,39 @@ function Sync:Serialize()
         table.insert(lines, table.concat({ "T", tostring(key), tostring(tonumber(deletedAt) or 0) }, "\t"))
     end
 
+    local gearKeys = {}
+    for id in pairs(Addon.db.gear and Addon.db.gear.sets or {}) do
+        table.insert(gearKeys, tostring(id))
+    end
+    table.sort(gearKeys)
+    for _, id in ipairs(gearKeys) do
+        local set = Addon.db.gear.sets[id]
+        if type(set) == "table" then
+            table.insert(lines, table.concat({
+                "H", Encode(id), tostring(tonumber(set.updatedAt) or 0), Encode(set.updatedBy),
+                tostring(tonumber(set.order) or 0), Encode(set.name), Encode(set.notes),
+            }, "\t"))
+            local slotKeys = {}
+            for slotKey in pairs(set.slots or {}) do
+                table.insert(slotKeys, tostring(slotKey))
+            end
+            table.sort(slotKeys)
+            for _, slotKey in ipairs(slotKeys) do
+                local item = set.slots[slotKey]
+                local link = type(item) == "table" and item.link or item
+                local itemID = type(item) == "table" and item.itemID or nil
+                if link and link ~= "" then
+                    table.insert(lines, table.concat({
+                        "I", Encode(id), Encode(slotKey), Encode(link), tostring(tonumber(itemID) or 0),
+                    }, "\t"))
+                end
+            end
+        end
+    end
+    for id, deletedAt in pairs(Addon.db.gear and Addon.db.gear.tombstones or {}) do
+        table.insert(lines, table.concat({ "Q", Encode(id), tostring(tonumber(deletedAt) or 0) }, "\t"))
+    end
+
     for _, peerName in pairs(Addon.db.sync.knownPeers or {}) do
         table.insert(lines, table.concat({ "K", Encode(peerName) }, "\t"))
     end
@@ -232,6 +265,9 @@ function Sync:RefreshUI()
     if Addon.Discussion then
         Addon.Discussion:Refresh()
     end
+    if Addon.Gear then
+        Addon.Gear:Refresh()
+    end
 end
 
 function Sync:Log(message)
@@ -275,7 +311,7 @@ local function EnsureThread(spellID)
 end
 
 function Sync:Deserialize(snapshot)
-    local data = { board = {}, baseBoard = {}, operations = {}, spells = {}, spellTombstones = {}, knownPeers = {}, priority = {}, priorityDeleted = {}, comments = {}, deleted = {}, audit = {} }
+    local data = { board = {}, baseBoard = {}, operations = {}, spells = {}, spellTombstones = {}, gearSets = {}, gearTombstones = {}, knownPeers = {}, priority = {}, priorityDeleted = {}, comments = {}, deleted = {}, audit = {} }
     for line in string.gmatch((snapshot or "") .. "\n", "(.-)\n") do
         local field = Fields(line)
         local kind = field[1]
@@ -321,6 +357,31 @@ function Sync:Deserialize(snapshot)
             data.spells[tostring(field[2])] = { id = tonumber(field[2]), category = Decode(field[3]), coa = field[4] == "1", updatedAt = tonumber(field[5]) or 0 }
         elseif kind == "T" then
             data.spellTombstones[tostring(field[2])] = tonumber(field[3]) or 0
+        elseif kind == "H" then
+            local id = Decode(field[2])
+            if id ~= "" then
+                local set = data.gearSets[id] or { id = id, slots = {} }
+                set.updatedAt = tonumber(field[3]) or 0
+                set.updatedBy = Decode(field[4])
+                set.order = tonumber(field[5]) or 0
+                set.name = Decode(field[6])
+                set.notes = Decode(field[7])
+                data.gearSets[id] = set
+            end
+        elseif kind == "I" then
+            local id = Decode(field[2])
+            local slotKey = Decode(field[3])
+            local link = Decode(field[4])
+            if id ~= "" and slotKey ~= "" and link ~= "" then
+                local set = data.gearSets[id] or { id = id, slots = {}, updatedAt = 0 }
+                set.slots[slotKey] = { link = link, itemID = tonumber(field[5]) or nil }
+                data.gearSets[id] = set
+            end
+        elseif kind == "Q" then
+            local id = Decode(field[2])
+            if id ~= "" then
+                data.gearTombstones[id] = tonumber(field[3]) or 0
+            end
         elseif kind == "K" then
             local peerName = Decode(field[2])
             if peerName ~= "" then
@@ -363,6 +424,24 @@ local function OperationSignature(operation)
         tostring(operation.kind or ""), tostring(operation.key or ""), tostring(operation.tier or ""),
         tostring(operation.before or ""), tostring(operation.after or ""),
     }, "|")
+end
+
+local function GearSetSignature(set)
+    local parts = {
+        tostring(set.name or ""), tostring(set.notes or ""), tostring(set.order or 0),
+        tostring(set.updatedBy or ""),
+    }
+    local slotKeys = {}
+    for slotKey in pairs(set.slots or {}) do
+        table.insert(slotKeys, tostring(slotKey))
+    end
+    table.sort(slotKeys)
+    for _, slotKey in ipairs(slotKeys) do
+        local item = set.slots[slotKey]
+        local link = type(item) == "table" and item.link or item
+        table.insert(parts, slotKey .. "=" .. tostring(link or ""))
+    end
+    return table.concat(parts, "|")
 end
 
 function Sync:ApplySnapshot(snapshot)
@@ -435,6 +514,34 @@ function Sync:ApplySnapshot(snapshot)
         if deletedAt >= localUpdated and deletedAt > (tonumber(Addon.db.spellTombstones[key]) or -1) then
             Addon.db.customSpells[key] = nil
             Addon.db.spellTombstones[key] = deletedAt
+            changed = true
+        end
+    end
+
+    Addon.db.gear = type(Addon.db.gear) == "table" and Addon.db.gear or {}
+    Addon.db.gear.sets = type(Addon.db.gear.sets) == "table" and Addon.db.gear.sets or {}
+    Addon.db.gear.tombstones = type(Addon.db.gear.tombstones) == "table" and Addon.db.gear.tombstones or {}
+    for id, set in pairs(incoming.gearSets) do
+        local localSet = Addon.db.gear.sets[id]
+        local localUpdated = localSet and tonumber(localSet.updatedAt) or -1
+        local deletedAt = tonumber(Addon.db.gear.tombstones[id]) or -1
+        local incomingUpdated = tonumber(set.updatedAt) or 0
+        local incomingSignature = GearSetSignature(set)
+        local localSignature = localSet and GearSetSignature(localSet) or ""
+        if incomingUpdated > math.max(localUpdated, deletedAt)
+            or (incomingUpdated == localUpdated and incomingUpdated > deletedAt and incomingSignature > localSignature)
+            or (not localSet and deletedAt < 0) then
+            Addon.db.gear.sets[id] = Addon.Util.DeepCopy(set)
+            Addon.db.gear.tombstones[id] = nil
+            changed = true
+        end
+    end
+    for id, deletedAt in pairs(incoming.gearTombstones) do
+        local localSet = Addon.db.gear.sets[id]
+        local localUpdated = localSet and tonumber(localSet.updatedAt) or -1
+        if deletedAt >= localUpdated and deletedAt > (tonumber(Addon.db.gear.tombstones[id]) or -1) then
+            Addon.db.gear.sets[id] = nil
+            Addon.db.gear.tombstones[id] = deletedAt
             changed = true
         end
     end

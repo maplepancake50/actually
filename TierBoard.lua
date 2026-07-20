@@ -128,7 +128,12 @@ function Board:SetSection(sectionKey)
     end
 
     self.activeSection = selected.key
+    if Addon.Gear then
+        Addon.Gear:SetVisible(selected.key == "gear")
+    end
     if selected.key == "tier" then
+        self.sectionPanel:Hide()
+    elseif selected.key == "gear" then
         self.sectionPanel:Hide()
     else
         self.sectionPanel.icon:SetTexture(selected.icon)
@@ -148,14 +153,9 @@ function Board:CreateSectionNavigation(closeButton)
     panel:SetPoint("TOPLEFT", frame, "TOPLEFT", 5, -5)
     panel:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -5, 5)
     panel:SetFrameLevel(frame:GetFrameLevel() + 20)
-    panel:EnableMouse(true)
-    panel:RegisterForDrag("LeftButton")
-    panel:SetScript("OnDragStart", function()
-        frame:StartMoving()
-    end)
-    panel:SetScript("OnDragStop", function()
-        frame:StopMovingOrSizing()
-    end)
+    -- Leave the visual-only panel mouse-transparent so dragging reaches the
+    -- board frame and behaves identically on every navigation section.
+    panel:EnableMouse(false)
     SetBackdrop(panel, { 0.025, 0.030, 0.045, 0.995 }, { 0.25, 0.72, 1.00, 1 })
 
     local icon = panel:CreateTexture(nil, "ARTWORK")
@@ -1572,6 +1572,9 @@ function Board:RefreshListControls()
             end
         end
     end
+    if Addon.Gear and Addon.Gear.frame then
+        Addon.Gear:RefreshPermissions()
+    end
 end
 
 function Board:RefreshAuditLog()
@@ -2300,5 +2303,8 @@ function Board:Create()
     self:Layout()
     self:CreateSpellEditor()
     self:CreateSectionNavigation(close)
+    if Addon.Gear then
+        Addon.Gear:Create(frame)
+    end
     frame:Hide()
 end
