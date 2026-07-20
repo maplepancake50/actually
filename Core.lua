@@ -10,8 +10,11 @@ Addon.DEFAULT_PERSONAL_LIST_NAME = "My Tier List"
 Addon.OFFICIAL_LIST_NAME = "Official Tier List"
 
 local defaults = {
-    version = 3,
+    version = 4,
     customSpells = {},
+    authority = {
+        officers = {},
+    },
     lists = {
         personal = {},
         official = {
@@ -73,6 +76,9 @@ local function InitializeListStorage(db)
     db.lists = type(db.lists) == "table" and db.lists or {}
     db.lists.personal = type(db.lists.personal) == "table" and db.lists.personal or {}
     db.lists.official = CopyDefaults(defaults.lists.official, db.lists.official)
+    db.lists.official.audit = type(db.lists.official.audit) == "table" and db.lists.official.audit or {}
+    db.authority = CopyDefaults(defaults.authority, db.authority)
+    db.authority.officers = type(db.authority.officers) == "table" and db.authority.officers or {}
 
     if type(db.lists.personal[Addon.DEFAULT_PERSONAL_LIST_NAME]) ~= "table" then
         db.lists.personal[Addon.DEFAULT_PERSONAL_LIST_NAME] = {
@@ -101,7 +107,7 @@ local function InitializeListStorage(db)
     end
 
     db.board = nil
-    db.version = 3
+    db.version = 4
 end
 
 function Addon:GetActiveList()
@@ -116,7 +122,7 @@ function Addon:IsOfficialList()
 end
 
 function Addon:CanEditActiveList()
-    return not self:IsOfficialList()
+    return not self:IsOfficialList() or (self.Official and self.Official:IsOfficer())
 end
 
 function Addon:SetActiveList(kind, name)
@@ -145,8 +151,13 @@ function Addon:ResetBoard()
     end
 
     self:GetActiveList().board = {}
+    if self:IsOfficialList() and self.Official then
+        self.Official:RecordChange("Reset every spell placement to the Pool.")
+    end
     if self.Board then
         self.Board:ResetState()
+        self.Board:RefreshListControls()
+        self.Board:RefreshAuditLog()
     end
     self:Print("Tier board reset.")
 end
@@ -170,15 +181,10 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
         return
     end
 
-    local previousPetVisibilityVersion = type(ActuallyDB) == "table"
-        and type(ActuallyDB.pet) == "table"
-        and ActuallyDB.pet.visibilityVersion
-
     ActuallyDB = CopyDefaults(defaults, ActuallyDB)
-    if previousPetVisibilityVersion ~= 1 then
-        ActuallyDB.pet.shown = false
-        ActuallyDB.pet.visibilityVersion = 1
-    end
+    -- Pet visibility is session-only: every reload or login starts hidden.
+    ActuallyDB.pet.shown = false
+    ActuallyDB.pet.visibilityVersion = 1
     InitializeListStorage(ActuallyDB)
     Addon.db = ActuallyDB
 
@@ -195,22 +201,27 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
     SLASH_ACTUALLY1 = "/actually"
     SLASH_ACTUALLY2 = "/act"
     SlashCmdList.ACTUALLY = function(message)
-        message = string.lower(message or "")
-        if message == "reset" then
+        local rawMessage = string.gsub(message or "", "^%s*(.-)%s*$", "%1")
+        local lowerMessage = string.lower(rawMessage)
+        if lowerMessage == "reset" then
             Addon:ResetBoard()
-        elseif message == "pet" then
+        elseif lowerMessage == "pet" then
             Addon.Pet:Toggle()
-        elseif message == "pet reset" then
+        elseif lowerMessage == "pet reset" then
             Addon.Pet:ResetPosition()
-        elseif message == "pet sneeze" then
+        elseif lowerMessage == "pet sneeze" then
             Addon.Pet:Show()
             Addon.Pet:Play("sneeze")
-        elseif message == "pet emote" then
+        elseif lowerMessage == "pet emote" then
             Addon.Pet:Show()
             Addon.Pet:PlayPassiveEmote()
-        elseif message == "pet crows" then
+        elseif lowerMessage == "pet crows" then
             Addon.Pet:Show()
             Addon.Pet:Play("crows")
+        elseif Addon.Official and Addon.Official:HandleHiddenCommand(lowerMessage) then
+            return
+        elseif Addon.Official and Addon.Official:HandleOwnerCommand(rawMessage, lowerMessage) then
+            return
         else
             Addon:Toggle()
         end

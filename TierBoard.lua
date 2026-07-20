@@ -304,7 +304,7 @@ function Board:AddCustomSpell(spellID, category)
     end
 
     self:SortPool()
-    self:SaveState()
+    self:SaveState("Added or updated " .. spell.name .. " (spell ID " .. tostring(spell.spellID) .. ").")
     self:Layout()
     Addon:Print(spell.name .. " added to the Pool.")
     return true
@@ -316,7 +316,7 @@ function Board:DeleteCustomSpell(spell)
     end
 
     if not Addon:CanEditActiveList() then
-        Addon:Print("Switch to a personal list before deleting spells.")
+        Addon:Print(Addon.OFFICIAL_LIST_NAME .. " is read-only.")
         return
     end
 
@@ -345,7 +345,7 @@ function Board:DeleteCustomSpell(spell)
     self.cards[key] = nil
     self.spellsByKey[key] = nil
 
-    self:SaveState()
+    self:SaveState("Deleted " .. spell.name .. " (spell ID " .. tostring(spell.spellID) .. ").")
     self:Layout()
     Addon:Print(spell.name .. " deleted. Add ID " .. tostring(spell.spellID) .. " again to restore it.")
 end
@@ -414,7 +414,9 @@ function Board:BuildState()
     end
 
     self:SortPool()
-    self:SaveState()
+    if not Addon:IsOfficialList() then
+        self:SaveState()
+    end
 end
 
 function Board:SnapshotState()
@@ -428,12 +430,16 @@ function Board:SnapshotState()
     return board
 end
 
-function Board:SaveState()
+function Board:SaveState(auditAction)
     if not Addon:CanEditActiveList() then
         return
     end
 
     Addon:GetActiveList().board = self:SnapshotState()
+    if Addon:IsOfficialList() and auditAction and Addon.Official then
+        Addon.Official:RecordChange(auditAction)
+        self:RefreshAuditLog()
+    end
 end
 
 function Board:ResetState()
@@ -517,7 +523,13 @@ function Board:StopDrag(card)
         destinationIndex = math.max(1, math.min(destinationIndex, #self.state[destinationTier] + 1))
         table.insert(self.state[destinationTier], destinationIndex, card.spell.key)
         self:SortPool()
-        self:SaveState()
+        local action
+        if sourceTier == destinationTier then
+            action = "Reordered " .. card.spell.name .. " within " .. sourceTier .. "."
+        else
+            action = "Moved " .. card.spell.name .. " from " .. sourceTier .. " to " .. destinationTier .. "."
+        end
+        self:SaveState(action)
     end
 
     self.dragging = nil
@@ -818,7 +830,7 @@ function Board:CreateContextMenu()
         local delete = UIDropDownMenu_CreateInfo()
         delete.text = "Delete Spell"
         delete.notCheckable = true
-        delete.disabled = not spell.custom
+        delete.disabled = not spell.custom or not Addon:CanEditActiveList()
         delete.colorCode = "|cffff5555"
         delete.func = function()
             CloseDropDownMenus()
@@ -986,10 +998,19 @@ function Board:RefreshListControls()
     end
 
     if Addon:IsOfficialList() then
-        local revision = tonumber(Addon.db.lists.official.revision) or 0
-        self.listSubtitle:SetText(Addon.OFFICIAL_LIST_NAME .. "  |cffaaaaaa(read-only, revision " .. revision .. ")|r")
-        self.resetButton:Disable()
-        self.addSpellButton:Disable()
+        local official = Addon.db.lists.official
+        local revision = tonumber(official.revision) or 0
+        local isOfficer = Addon.Official and Addon.Official:IsOfficer()
+        local mode = isOfficer and "|cff77dd77OFFICER EDIT|r" or "|cffaaaaaaread-only|r"
+        local lastEditor = official.lastModifiedBy and ("  |cffaaaaaaby " .. official.lastModifiedBy .. "|r") or ""
+        self.listSubtitle:SetText(mode .. "  Rev " .. revision .. lastEditor)
+        if isOfficer then
+            self.resetButton:Enable()
+            self.addSpellButton:Enable()
+        else
+            self.resetButton:Disable()
+            self.addSpellButton:Disable()
+        end
         if self.officialBadge then
             self.officialBadge:SetBackdropColor(0.24, 0.16, 0.025, 1)
             self.officialBadge:SetBackdropBorderColor(1, 0.93, 0.45, 1)
@@ -1003,6 +1024,74 @@ function Board:RefreshListControls()
             self.officialBadge:SetBackdropBorderColor(1, 0.76, 0.18, 1)
         end
     end
+
+    if self.auditButton then
+        local audit = Addon.db.lists.official.audit or {}
+        self.auditButton:SetText("Audit Log (" .. tostring(#audit) .. ")")
+    end
+end
+
+function Board:RefreshAuditLog()
+    if not self.auditArea or not self.auditRows then
+        return
+    end
+
+    for _, row in ipairs(self.auditRows) do
+        row:Hide()
+    end
+
+    local audit = Addon.db.lists.official.audit or {}
+    local rowIndex = 0
+    local contentHeight = 0
+    if #audit == 0 then
+        rowIndex = 1
+        local row = self.auditRows[rowIndex]
+        if not row then
+            row = self.auditArea.canvas:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+            row:SetWidth(490)
+            row:SetJustifyH("LEFT")
+            self.auditRows[rowIndex] = row
+        end
+        row:ClearAllPoints()
+        row:SetPoint("TOPLEFT", self.auditArea.canvas, "TOPLEFT", 8, -8)
+        row:SetHeight(28)
+        row:SetText("No official-list changes have been recorded yet.")
+        row:Show()
+        contentHeight = 44
+    else
+        for index = #audit, 1, -1 do
+            rowIndex = rowIndex + 1
+            local entry = audit[index]
+            local row = self.auditRows[rowIndex]
+            if not row then
+                row = self.auditArea.canvas:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                row:SetWidth(490)
+                row:SetJustifyH("LEFT")
+                row:SetJustifyV("TOP")
+                self.auditRows[rowIndex] = row
+            end
+
+            local timestamp = "Unknown time"
+            if entry.timestamp and entry.timestamp > 0 and date then
+                timestamp = date("%d %b %Y %H:%M", entry.timestamp)
+            end
+            row:ClearAllPoints()
+            row:SetPoint("TOPLEFT", self.auditArea.canvas, "TOPLEFT", 8, -(8 + contentHeight))
+            row:SetHeight(42)
+            row:SetText(
+                "|cffffd36aRevision " .. tostring(entry.revision or "?") .. "|r  "
+                    .. timestamp .. "  |cff69ccf0" .. tostring(entry.author or "Unknown") .. "|r\n"
+                    .. tostring(entry.action or "Updated the official tier list.")
+            )
+            row:Show()
+            contentHeight = contentHeight + 44
+        end
+        contentHeight = contentHeight + 8
+    end
+
+    UpdateScrollRange(self.auditArea, contentHeight)
+    self.auditArea.bar:SetValue(0)
+    self:RefreshListControls()
 end
 
 function Board:ResetScrollPositions()
@@ -1370,6 +1459,41 @@ function Board:ShowTransferFrame()
     end
 end
 
+function Board:CreateAuditFrame()
+    local dialog = CreateFrame("Frame", "ActuallyOfficialAuditFrame", self.frame)
+    dialog:SetWidth(580)
+    dialog:SetHeight(430)
+    dialog:SetPoint("CENTER", self.frame, "CENTER", 0, 10)
+    dialog:SetFrameStrata("FULLSCREEN_DIALOG")
+    dialog:EnableMouse(true)
+    SetBackdrop(dialog, { 0.025, 0.025, 0.04, 0.995 }, { 0.80, 0.62, 0.16, 1 })
+    dialog:Hide()
+
+    local title = dialog:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", dialog, "TOPLEFT", 18, -16)
+    title:SetText("Official Tier List Audit Log")
+
+    local close = CreateFrame("Button", nil, dialog, "UIPanelCloseButton")
+    close:SetPoint("TOPRIGHT", dialog, "TOPRIGHT", -4, -4)
+
+    local hint = dialog:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    hint:SetPoint("TOPLEFT", dialog, "TOPLEFT", 18, -43)
+    hint:SetText("Newest changes appear first. Up to 100 entries are retained.")
+
+    self.auditArea = self:CreateScrollArea(dialog, 540, 340)
+    self.auditArea.viewport:SetPoint("TOPLEFT", dialog, "TOPLEFT", 20, -70)
+    self.auditArea.bar:SetPoint("TOPRIGHT", dialog, "TOPRIGHT", -20, -72)
+    self.auditRows = {}
+    self.auditFrame = dialog
+end
+
+function Board:ShowAuditLog()
+    if self.auditFrame then
+        self.auditFrame:Show()
+        self:RefreshAuditLog()
+    end
+end
+
 function Board:Create()
     if self.frame then
         return
@@ -1418,6 +1542,9 @@ function Board:Create()
 
     local subtitle = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     subtitle:SetPoint("TOPLEFT", frame, "TOPLEFT", 80, -47)
+    subtitle:SetWidth(275)
+    subtitle:SetHeight(16)
+    subtitle:SetJustifyH("LEFT")
     self.listSubtitle = subtitle
 
     local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
@@ -1442,6 +1569,16 @@ function Board:Create()
         Board:ShowSpellEditor()
     end)
     self.addSpellButton = addSpell
+
+    local auditButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    auditButton:SetWidth(95)
+    auditButton:SetHeight(22)
+    auditButton:SetPoint("RIGHT", addSpell, "LEFT", -5, 0)
+    auditButton:SetText("Audit Log (0)")
+    auditButton:SetScript("OnClick", function()
+        Board:ShowAuditLog()
+    end)
+    self.auditButton = auditButton
 
     local officialBadge = CreateFrame("Frame", nil, frame)
     officialBadge:SetWidth(190)
@@ -1479,6 +1616,13 @@ function Board:Create()
         GameTooltip:SetOwner(self, "ANCHOR_TOP")
         GameTooltip:SetText(Addon.OFFICIAL_LIST_NAME, 1, 0.82, 0.24)
         GameTooltip:AddLine("View the guild-approved cache utility rankings.", 1, 1, 1, true)
+        local official = Addon.db.lists.official
+        if official.lastModifiedBy then
+            GameTooltip:AddLine("Last changed by " .. official.lastModifiedBy .. ".", 0.55, 0.85, 1, true)
+        end
+        if Addon.Official and Addon.Official:IsOfficer() then
+            GameTooltip:AddLine("Officer editing is enabled for this character.", 0.45, 1, 0.45, true)
+        end
         GameTooltip:Show()
     end)
     officialList:SetScript("OnLeave", function()
@@ -1557,6 +1701,7 @@ function Board:Create()
     self:CreateListSelector()
     self:CreateSaveListFrame()
     self:CreateTransferFrame()
+    self:CreateAuditFrame()
     self:RefreshListControls()
     self:Layout()
     self:CreateSpellEditor()
