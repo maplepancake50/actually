@@ -174,6 +174,10 @@ function Board:MatchesFilters(spell)
         return false
     end
 
+    if self.filterCOA and not spell.coa then
+        return false
+    end
+
     local search = self.searchText or ""
     if search ~= "" then
         local name = string.lower(spell.name or "")
@@ -234,6 +238,7 @@ function Board:BuildCustomSpell(spellID, saved)
         name = name,
         icon = icon or "Interface\\Icons\\INV_Misc_QuestionMark",
         category = NormalizeCategory(saved.category),
+        coa = saved.coa == true,
         note = "Added in game from spell ID " .. tostring(spellID) .. ".",
         custom = true,
     }
@@ -247,6 +252,7 @@ function Board:BuildCatalog()
         local spellID = tonumber(saved.id or savedKey)
         if spellID then
             saved.category = NormalizeCategory(saved.category)
+            saved.coa = saved.coa == true
             local spell = self:BuildCustomSpell(spellID, saved)
             if spell then
                 table.insert(self.catalog, spell)
@@ -256,16 +262,21 @@ function Board:BuildCatalog()
     end
 end
 
-function Board:UpsertCustomSpell(spellID, category)
+function Board:UpsertCustomSpell(spellID, category, coa)
     local name = GetSpellInfo(spellID)
     if not name then
         return nil
     end
 
     local savedKey = tostring(spellID)
+    local existingSaved = Addon.db.customSpells[savedKey]
+    if coa == nil then
+        coa = existingSaved and existingSaved.coa == true
+    end
     Addon.db.customSpells[savedKey] = {
         id = spellID,
         category = NormalizeCategory(category),
+        coa = coa == true,
     }
 
     local key = "spell:" .. savedKey
@@ -292,8 +303,8 @@ function Board:UpsertCustomSpell(spellID, category)
     return self.spellsByKey[key]
 end
 
-function Board:AddCustomSpell(spellID, category)
-    local spell = self:UpsertCustomSpell(spellID, category)
+function Board:AddCustomSpell(spellID, category, coa)
+    local spell = self:UpsertCustomSpell(spellID, category, coa)
     if not spell then
         Addon:Print("Spell ID " .. tostring(spellID) .. " is not available in the client.")
         return false
@@ -308,6 +319,64 @@ function Board:AddCustomSpell(spellID, category)
     self:Layout()
     Addon:Print(spell.name .. " added to the Pool.")
     return true
+end
+
+function Board:SetCustomSpellCategory(spell, category)
+    if not spell or not spell.custom or not spell.spellID then
+        return
+    end
+
+    if not Addon:CanEditActiveList() then
+        Addon:Print(Addon.OFFICIAL_LIST_NAME .. " is read-only.")
+        return
+    end
+
+    category = NormalizeCategory(category)
+    if spell.category == category then
+        return
+    end
+
+    local saved = Addon.db.customSpells[tostring(spell.spellID)]
+    if not saved then
+        return
+    end
+
+    local oldCategory = spell.category
+    saved.category = category
+    spell.category = category
+
+    self:SortPool()
+    self:SaveState("Changed " .. spell.name .. " category from " .. oldCategory .. " to " .. category .. ".")
+    self:Layout()
+    Addon:Print(spell.name .. " category changed to " .. category .. ".")
+end
+
+function Board:SetCustomSpellCOA(spell, enabled)
+    if not spell or not spell.custom or not spell.spellID then
+        return
+    end
+
+    if not Addon:CanEditActiveList() then
+        Addon:Print(Addon.OFFICIAL_LIST_NAME .. " is read-only.")
+        return
+    end
+
+    enabled = enabled == true
+    if spell.coa == enabled then
+        return
+    end
+
+    local saved = Addon.db.customSpells[tostring(spell.spellID)]
+    if not saved then
+        return
+    end
+
+    saved.coa = enabled
+    spell.coa = enabled
+    local action = enabled and "Marked " or "Unmarked "
+    self:SaveState(action .. spell.name .. " as COA.")
+    self:Layout()
+    Addon:Print(spell.name .. (enabled and " marked as COA." or " is no longer marked as COA."))
 end
 
 function Board:DeleteCustomSpell(spell)
@@ -577,6 +646,9 @@ function Board:CreateCard(spell)
             GameTooltip:AddLine(self.spell.category, 0.35, 0.75, 1)
             GameTooltip:AddLine(self.spell.note, 1, 1, 1, true)
         end
+        if self.spell.coa then
+            GameTooltip:AddLine("COA", 1, 0.76, 0.18)
+        end
         GameTooltip:AddLine("Drag to another row or position.", 0.55, 0.9, 0.55)
         GameTooltip:AddLine("Right-click for spell options.", 0.85, 0.70, 0.35)
         GameTooltip:Show()
@@ -755,11 +827,15 @@ function Board:CreateFilterBar()
     UIDropDownMenu_SetWidth(categoryDropdown, 125)
     bar.categoryIndex = 1
 
-    local clearButton = CreateFrame("Button", nil, bar, "UIPanelButtonTemplate")
-    clearButton:SetWidth(72)
-    clearButton:SetHeight(22)
-    clearButton:SetPoint("LEFT", categoryDropdown, "RIGHT", -7, 2)
-    clearButton:SetText("Clear")
+    local coaCheckbox = CreateFrame("CheckButton", "ActuallyCOAFilterCheckButton", bar, "UICheckButtonTemplate")
+    coaCheckbox:SetWidth(24)
+    coaCheckbox:SetHeight(24)
+    coaCheckbox:SetPoint("LEFT", categoryDropdown, "RIGHT", -4, 2)
+    coaCheckbox:SetChecked(false)
+
+    local coaLabel = coaCheckbox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    coaLabel:SetPoint("LEFT", coaCheckbox, "RIGHT", 1, 1)
+    coaLabel:SetText("COA only")
 
     local countText = bar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     countText:SetPoint("RIGHT", bar, "RIGHT", -3, 0)
@@ -768,6 +844,7 @@ function Board:CreateFilterBar()
     local function RefreshFilters()
         self.searchText = string.lower(searchBox:GetText() or "")
         self.filterCategory = FILTER_CATEGORIES[bar.categoryIndex]
+        self.filterCOA = coaCheckbox:GetChecked() and true or false
         self:ResetScrollPositions()
         self:Layout()
     end
@@ -788,36 +865,103 @@ function Board:CreateFilterBar()
         RefreshFilters()
     end)
     SetDropdownSelection(categoryDropdown, "All")
-
-    clearButton:SetScript("OnClick", function()
-        bar.categoryIndex = 1
-        SetDropdownSelection(categoryDropdown, "All")
-        searchBox:SetText("")
-        RefreshFilters()
-    end)
+    coaCheckbox:SetScript("OnClick", RefreshFilters)
 
     self.searchText = ""
     self.filterCategory = "All"
+    self.filterCOA = false
 end
 
-function Board:CreateContextMenu()
-    local menu = CreateFrame("Frame", "ActuallySpellContextMenu", UIParent, "UIDropDownMenuTemplate")
-
-    StaticPopupDialogs.ACTUALLY_DELETE_SPELL = {
-        text = "Delete %s from actually?",
+function Board:CreateResetConfirmations()
+    StaticPopupDialogs.ACTUALLY_RESET_PERSONAL = {
+        text = "Reset %s?\n\nEvery spell will be returned to the Pool.",
         button1 = YES,
         button2 = NO,
-        OnAccept = function(dialog, spell)
-            Board:DeleteCustomSpell(spell)
+        OnAccept = function()
+            Addon:ResetBoard()
         end,
         timeout = 0,
         whileDead = 1,
         hideOnEscape = 1,
     }
 
+    StaticPopupDialogs.ACTUALLY_RESET_OFFICIAL_FIRST = {
+        text = "Reset the OFFICIAL TIER LIST?\n\nThis affects the guild-approved rankings and will be recorded in the audit log.",
+        button1 = "Continue",
+        button2 = CANCEL,
+        OnAccept = function()
+            StaticPopup_Show("ACTUALLY_RESET_OFFICIAL_SECOND")
+        end,
+        timeout = 0,
+        whileDead = 1,
+        hideOnEscape = 1,
+        showAlert = 1,
+    }
+
+    StaticPopupDialogs.ACTUALLY_RESET_OFFICIAL_SECOND = {
+        text = "SECOND WARNING\n\nEvery official spell placement will be returned to the Pool.",
+        button1 = "Continue",
+        button2 = CANCEL,
+        OnAccept = function()
+            StaticPopup_Show("ACTUALLY_RESET_OFFICIAL_FINAL")
+        end,
+        timeout = 0,
+        whileDead = 1,
+        hideOnEscape = 1,
+        showAlert = 1,
+    }
+
+    StaticPopupDialogs.ACTUALLY_RESET_OFFICIAL_FINAL = {
+        text = "FINAL WARNING (3 OF 3)\n\nAre you absolutely sure you want to reset the Official Tier List?",
+        button1 = "RESET OFFICIAL",
+        button2 = CANCEL,
+        OnAccept = function()
+            Addon:ResetBoard()
+        end,
+        timeout = 0,
+        whileDead = 1,
+        hideOnEscape = 1,
+        showAlert = 1,
+    }
+end
+
+function Board:RequestReset()
+    if not Addon:CanEditActiveList() then
+        Addon:Print(Addon.OFFICIAL_LIST_NAME .. " is read-only.")
+        return
+    end
+
+    if Addon:IsOfficialList() then
+        StaticPopup_Show("ACTUALLY_RESET_OFFICIAL_FIRST")
+    else
+        StaticPopup_Show("ACTUALLY_RESET_PERSONAL", Addon.db.activeList.name)
+    end
+end
+
+function Board:CreateContextMenu()
+    local menu = CreateFrame("Frame", "ActuallySpellContextMenu", UIParent, "UIDropDownMenuTemplate")
+
     UIDropDownMenu_Initialize(menu, function(dropdown, level)
         local spell = Board.contextSpell
         if not spell then
+            return
+        end
+
+        if level == 2 and UIDROPDOWNMENU_MENU_VALUE == "ACTUALLY_CATEGORY" then
+            for _, category in ipairs(SPELL_CATEGORIES) do
+                local selectedCategory = category
+                local categoryChoice = UIDropDownMenu_CreateInfo()
+                categoryChoice.text = selectedCategory
+                categoryChoice.value = selectedCategory
+                categoryChoice.checked = spell.category == selectedCategory
+                categoryChoice.func = function()
+                    CloseDropDownMenus()
+                    Board:SetCustomSpellCategory(spell, selectedCategory)
+                end
+                UIDropDownMenu_AddButton(categoryChoice, level)
+            end
+            return
+        elseif level ~= 1 then
             return
         end
 
@@ -827,6 +971,35 @@ function Board:CreateContextMenu()
         title.notCheckable = true
         UIDropDownMenu_AddButton(title, level)
 
+        local discussion = UIDropDownMenu_CreateInfo()
+        discussion.text = "Reasoning & Discussion"
+        discussion.notCheckable = true
+        discussion.func = function()
+            CloseDropDownMenus()
+            if Addon.Discussion then
+                Addon.Discussion:Show(spell)
+            end
+        end
+        UIDropDownMenu_AddButton(discussion, level)
+
+        local category = UIDropDownMenu_CreateInfo()
+        category.text = "Category: " .. tostring(spell.category or "Other")
+        category.notCheckable = true
+        category.hasArrow = true
+        category.value = "ACTUALLY_CATEGORY"
+        category.disabled = not spell.custom or not Addon:CanEditActiveList()
+        UIDropDownMenu_AddButton(category, level)
+
+        local coa = UIDropDownMenu_CreateInfo()
+        coa.text = "COA"
+        coa.checked = spell.coa == true
+        coa.disabled = not spell.custom or not Addon:CanEditActiveList()
+        coa.func = function()
+            CloseDropDownMenus()
+            Board:SetCustomSpellCOA(spell, not spell.coa)
+        end
+        UIDropDownMenu_AddButton(coa, level)
+
         local delete = UIDropDownMenu_CreateInfo()
         delete.text = "Delete Spell"
         delete.notCheckable = true
@@ -834,7 +1007,7 @@ function Board:CreateContextMenu()
         delete.colorCode = "|cffff5555"
         delete.func = function()
             CloseDropDownMenus()
-            StaticPopup_Show("ACTUALLY_DELETE_SPELL", spell.name, nil, spell)
+            Board:DeleteCustomSpell(spell)
         end
         UIDropDownMenu_AddButton(delete, level)
 
@@ -905,6 +1078,16 @@ function Board:CreateSpellEditor()
     end)
     SetDropdownSelection(categoryDropdown, SPELL_CATEGORIES[editor.categoryIndex])
 
+    local coaCheckbox = CreateFrame("CheckButton", "ActuallyAddSpellCOACheckButton", editor, "UICheckButtonTemplate")
+    coaCheckbox:SetWidth(24)
+    coaCheckbox:SetHeight(24)
+    coaCheckbox:SetPoint("LEFT", categoryDropdown, "RIGHT", -4, 2)
+    coaCheckbox:SetChecked(false)
+
+    local coaLabel = coaCheckbox:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    coaLabel:SetPoint("LEFT", coaCheckbox, "RIGHT", 1, 1)
+    coaLabel:SetText("COA")
+
     local hint = editor:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     hint:SetPoint("TOPLEFT", editor, "TOPLEFT", 18, -161)
     hint:SetText("The native tooltip supplies description and cooldown text.")
@@ -963,7 +1146,11 @@ function Board:CreateSpellEditor()
     end)
 
     addButton:SetScript("OnClick", function()
-        if editor.spellID and Board:AddCustomSpell(editor.spellID, SPELL_CATEGORIES[editor.categoryIndex]) then
+        if editor.spellID and Board:AddCustomSpell(
+            editor.spellID,
+            SPELL_CATEGORIES[editor.categoryIndex],
+            coaCheckbox:GetChecked() and true or false
+        ) then
             editor:Hide()
         end
     end)
@@ -971,6 +1158,7 @@ function Board:CreateSpellEditor()
     editor:SetScript("OnShow", function()
         editor.categoryIndex = #SPELL_CATEGORIES
         SetDropdownSelection(categoryDropdown, SPELL_CATEGORIES[editor.categoryIndex])
+        coaCheckbox:SetChecked(false)
         input:SetText("")
         input:SetFocus()
     end)
@@ -997,10 +1185,10 @@ function Board:RefreshListControls()
         return
     end
 
+    local isOfficer = Addon.Official and Addon.Official:IsOfficer()
     if Addon:IsOfficialList() then
         local official = Addon.db.lists.official
         local revision = tonumber(official.revision) or 0
-        local isOfficer = Addon.Official and Addon.Official:IsOfficer()
         local mode = isOfficer and "|cff77dd77OFFICER EDIT|r" or "|cffaaaaaaread-only|r"
         local lastEditor = official.lastModifiedBy and ("  |cffaaaaaaby " .. official.lastModifiedBy .. "|r") or ""
         self.listSubtitle:SetText(mode .. "  Rev " .. revision .. lastEditor)
@@ -1028,6 +1216,14 @@ function Board:RefreshListControls()
     if self.auditButton then
         local audit = Addon.db.lists.official.audit or {}
         self.auditButton:SetText("Audit Log (" .. tostring(#audit) .. ")")
+        if isOfficer then
+            self.auditButton:Show()
+        else
+            self.auditButton:Hide()
+            if self.auditFrame then
+                self.auditFrame:Hide()
+            end
+        end
     end
 end
 
@@ -1165,7 +1361,8 @@ function Board:ExportCurrentList()
             local spell = self.spellsByKey[key]
             if spell and spell.spellID then
                 local categoryIndex = CATEGORY_INDEX[NormalizeCategory(spell.category)] or #SPELL_CATEGORIES
-                table.insert(records, tostring(spell.spellID) .. "." .. tostring(categoryIndex))
+                local coaFlag = spell.coa and 1 or 0
+                table.insert(records, tostring(spell.spellID) .. "." .. tostring(categoryIndex) .. "." .. tostring(coaFlag))
             end
         end
         table.insert(segments, tier .. "=" .. table.concat(records, ","))
@@ -1198,7 +1395,11 @@ function Board:ImportPersonalList(name, encoded)
 
         if payload ~= "" then
             for token in string.gmatch(payload, "[^,]+") do
-                local spellIDText, categoryIndexText = string.match(token, "^(%d+)%.(%d+)$")
+                local spellIDText, categoryIndexText, coaFlagText = string.match(token, "^(%d+)%.(%d+)%.([01])$")
+                if not spellIDText then
+                    spellIDText, categoryIndexText = string.match(token, "^(%d+)%.(%d+)$")
+                    coaFlagText = "0"
+                end
                 local spellID = tonumber(spellIDText)
                 local categoryIndex = tonumber(categoryIndexText)
                 if not spellID or not SPELL_CATEGORIES[categoryIndex] or seenIDs[spellID] then
@@ -1209,6 +1410,7 @@ function Board:ImportPersonalList(name, encoded)
                 table.insert(pending, {
                     id = spellID,
                     category = SPELL_CATEGORIES[categoryIndex],
+                    coa = coaFlagText == "1",
                     tier = tier,
                 })
                 if #pending > 750 then
@@ -1230,7 +1432,7 @@ function Board:ImportPersonalList(name, encoded)
     local imported = 0
     local unavailable = 0
     for _, entry in ipairs(pending) do
-        local spell = self:UpsertCustomSpell(entry.id, entry.category)
+        local spell = self:UpsertCustomSpell(entry.id, entry.category, entry.coa)
         if spell then
             table.insert(board[entry.tier], spell.key)
             imported = imported + 1
@@ -1488,6 +1690,9 @@ function Board:CreateAuditFrame()
 end
 
 function Board:ShowAuditLog()
+    if not Addon.Official or not Addon.Official:IsOfficer() then
+        return
+    end
     if self.auditFrame then
         self.auditFrame:Show()
         self:RefreshAuditLog()
@@ -1503,7 +1708,7 @@ function Board:Create()
 
     local frame = CreateFrame("Frame", "ActuallyTierBoardFrame", UIParent)
     frame:SetWidth(980)
-    frame:SetHeight(738)
+    frame:SetHeight(750)
     frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     frame:SetFrameStrata("DIALOG")
     frame:SetMovable(true)
@@ -1553,17 +1758,15 @@ function Board:Create()
     local reset = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
     reset:SetWidth(90)
     reset:SetHeight(22)
-    reset:SetPoint("TOPRIGHT", close, "TOPLEFT", -4, -2)
     reset:SetText("Reset Board")
     reset:SetScript("OnClick", function()
-        Addon:ResetBoard()
+        Board:RequestReset()
     end)
     self.resetButton = reset
 
     local addSpell = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
     addSpell:SetWidth(90)
     addSpell:SetHeight(22)
-    addSpell:SetPoint("RIGHT", reset, "LEFT", -5, 0)
     addSpell:SetText("Add Spell")
     addSpell:SetScript("OnClick", function()
         Board:ShowSpellEditor()
@@ -1573,7 +1776,7 @@ function Board:Create()
     local auditButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
     auditButton:SetWidth(95)
     auditButton:SetHeight(22)
-    auditButton:SetPoint("RIGHT", addSpell, "LEFT", -5, 0)
+    auditButton:SetPoint("TOPRIGHT", close, "TOPLEFT", -4, -2)
     auditButton:SetText("Audit Log (0)")
     auditButton:SetScript("OnClick", function()
         Board:ShowAuditLog()
@@ -1583,9 +1786,16 @@ function Board:Create()
     local officialBadge = CreateFrame("Frame", nil, frame)
     officialBadge:SetWidth(190)
     officialBadge:SetHeight(36)
-    officialBadge:SetPoint("TOPLEFT", frame, "TOPLEFT", 365, -39)
+    officialBadge:SetPoint("TOPLEFT", frame, "TOPLEFT", 365, -30)
     SetBackdrop(officialBadge, { 0.16, 0.105, 0.025, 0.98 }, { 1.00, 0.76, 0.18, 1 })
     self.officialBadge = officialBadge
+
+    local discussionHint = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    discussionHint:SetPoint("LEFT", officialBadge, "RIGHT", 14, 0)
+    discussionHint:SetWidth(350)
+    discussionHint:SetJustifyH("LEFT")
+    discussionHint:SetText("Right click spell for reasoning and discussion")
+    discussionHint:SetTextColor(1, 0.78, 0.22)
 
     local crownGlow = officialBadge:CreateTexture(nil, "BACKGROUND")
     crownGlow:SetWidth(48)
@@ -1635,41 +1845,54 @@ function Board:Create()
         GameTooltip:Hide()
     end)
 
-    local selectList = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    selectList:SetWidth(110)
+    local footer = CreateFrame("Frame", nil, frame)
+    footer:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 12, 8)
+    footer:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 8)
+    footer:SetHeight(34)
+    SetBackdrop(footer, { 0.035, 0.04, 0.055, 0.96 }, { 0.13, 0.32, 0.43, 1 })
+
+    local selectList = CreateFrame("Button", nil, footer, "UIPanelButtonTemplate")
+    selectList:SetWidth(120)
     selectList:SetHeight(22)
-    selectList:SetPoint("LEFT", officialBadge, "RIGHT", 6, 0)
     selectList:SetText("Select Tier List")
     selectList:SetScript("OnClick", function(self)
         ToggleDropDownMenu(1, nil, Board.listSelectorMenu, self, 0, 0)
     end)
-    local saveList = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    saveList:SetWidth(80)
+
+    local saveList = CreateFrame("Button", nil, footer, "UIPanelButtonTemplate")
+    saveList:SetWidth(90)
     saveList:SetHeight(22)
-    saveList:SetPoint("LEFT", selectList, "RIGHT", 6, 0)
     saveList:SetText("Save As")
     saveList:SetScript("OnClick", function()
         Board.saveListFrame:Show()
     end)
 
-    local transfer = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    transfer:SetWidth(105)
+    local transfer = CreateFrame("Button", nil, footer, "UIPanelButtonTemplate")
+    transfer:SetWidth(115)
     transfer:SetHeight(22)
-    transfer:SetPoint("LEFT", saveList, "RIGHT", 6, 0)
     transfer:SetText("Import / Export")
     transfer:SetScript("OnClick", function()
         Board:ShowTransferFrame()
     end)
 
-    local petCheckbox = CreateFrame("CheckButton", "ActuallyShowPetCheckButton", frame, "UICheckButtonTemplate")
+    transfer:SetPoint("RIGHT", footer, "RIGHT", -6, 0)
+    saveList:SetPoint("RIGHT", transfer, "LEFT", -6, 0)
+    selectList:SetPoint("RIGHT", saveList, "LEFT", -6, 0)
+
+    local petCheckbox = CreateFrame("CheckButton", "ActuallyShowPetCheckButton", footer, "UICheckButtonTemplate")
     petCheckbox:SetWidth(24)
     petCheckbox:SetHeight(24)
-    petCheckbox:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 14, 8)
+    petCheckbox:SetPoint("LEFT", footer, "LEFT", 6, 0)
     petCheckbox:SetChecked(Addon.db.pet.shown == true)
 
     local petCheckboxLabel = petCheckbox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     petCheckboxLabel:SetPoint("LEFT", petCheckbox, "RIGHT", 2, 1)
     petCheckboxLabel:SetText("Show pet")
+
+    reset:SetParent(footer)
+    addSpell:SetParent(footer)
+    reset:SetPoint("LEFT", footer, "LEFT", 100, 0)
+    addSpell:SetPoint("LEFT", reset, "RIGHT", 6, 0)
 
     petCheckbox:SetScript("OnClick", function(self)
         if self:GetChecked() then
@@ -1697,6 +1920,7 @@ function Board:Create()
 
     self:BuildState()
     self:CreateFilterBar()
+    self:CreateResetConfirmations()
     self:CreateContextMenu()
     self:CreateListSelector()
     self:CreateSaveListFrame()

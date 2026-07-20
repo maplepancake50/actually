@@ -10,8 +10,9 @@ Addon.DEFAULT_PERSONAL_LIST_NAME = "My Tier List"
 Addon.OFFICIAL_LIST_NAME = "Official Tier List"
 
 local defaults = {
-    version = 4,
+    version = 5,
     customSpells = {},
+    discussions = {},
     authority = {
         officers = {},
     },
@@ -79,6 +80,7 @@ local function InitializeListStorage(db)
     db.lists.official.audit = type(db.lists.official.audit) == "table" and db.lists.official.audit or {}
     db.authority = CopyDefaults(defaults.authority, db.authority)
     db.authority.officers = type(db.authority.officers) == "table" and db.authority.officers or {}
+    db.discussions = type(db.discussions) == "table" and db.discussions or {}
 
     if type(db.lists.personal[Addon.DEFAULT_PERSONAL_LIST_NAME]) ~= "table" then
         db.lists.personal[Addon.DEFAULT_PERSONAL_LIST_NAME] = {
@@ -107,7 +109,7 @@ local function InitializeListStorage(db)
     end
 
     db.board = nil
-    db.version = 4
+    db.version = 5
 end
 
 function Addon:GetActiveList()
@@ -204,7 +206,11 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
         local rawMessage = string.gsub(message or "", "^%s*(.-)%s*$", "%1")
         local lowerMessage = string.lower(rawMessage)
         if lowerMessage == "reset" then
-            Addon:ResetBoard()
+            if Addon.Board and Addon.Board.RequestReset then
+                Addon.Board:RequestReset()
+            else
+                Addon:ResetBoard()
+            end
         elseif lowerMessage == "pet" then
             Addon.Pet:Toggle()
         elseif lowerMessage == "pet reset" then
