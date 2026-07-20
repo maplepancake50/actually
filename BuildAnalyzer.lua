@@ -288,6 +288,7 @@ function Analyzer:ShowResults()
         local color = TIER_COLORS[result.grade]
         self.gradeText:SetText(result.grade)
         self.gradeText:SetTextColor(color[1], color[2], color[3])
+        self.gradeBadge:SetBackdropBorderColor(color[1], color[2], color[3], 1)
         self.summaryText:SetText(
             tostring(#result.matches) .. " official-ranked spells found  |  " ..
             tostring(result.ignoredCount) .. " unlisted spells ignored"
@@ -297,6 +298,7 @@ function Analyzer:ShowResults()
     else
         self.gradeText:SetText("--")
         self.gradeText:SetTextColor(0.65, 0.68, 0.72)
+        self.gradeBadge:SetBackdropBorderColor(0.38, 0.42, 0.48, 1)
         self.summaryText:SetText("No official-ranked known spells found")
         self.resultsViewport:Hide()
         self.resultsBar:Hide()
@@ -314,6 +316,11 @@ function Analyzer:ShowResults()
         Addon.Pet:Play("happy")
         Addon.Pet:ShowBubble(result.grade and ("Your build is " .. result.grade .. " tier!") or "No ranked spells yet!", 2.4)
     end
+
+    if self.petWasTemporarilyShown then
+        self.petRestoreTimer = 4
+        self.petRestoreFrame:Show()
+    end
 end
 
 function Analyzer:Start()
@@ -321,12 +328,20 @@ function Analyzer:Start()
         return
     end
 
+    if self.petRestoreTimer then
+        self.petRestoreTimer = nil
+        self.petRestoreFrame:Hide()
+    end
+    if Addon.Pet and not self.petWasTemporarilyShown then
+        self.petWasTemporarilyShown = not (Addon.Pet.frame and Addon.Pet.frame:IsShown())
+    end
+
     if self.frame:IsShown() then
         self.frame:Hide()
     end
     self.pendingResult = self:Calculate()
     self.elapsed = 0
-    self.duration = 4 + math.random() * 3
+    self.duration = (4 + math.random() * 3) * 0.70
     self.running = true
     self:SetProgress(1)
     self.resultsPanel:Hide()
@@ -349,11 +364,34 @@ function Analyzer:Cancel()
     end
 
     self.running = false
+    self.petRestoreTimer = nil
+    self.petRestoreFrame:Hide()
     self.progressFrame:Hide()
     self.startButton:Enable()
     self.startButton:SetText("Analyse Again")
     if Addon.Pet and Addon.Pet.animationName == "research" then
         Addon.Pet:FinishAnimation()
+    end
+    self.petWasTemporarilyShown = false
+end
+
+function Analyzer:UpdatePetRestore(elapsed)
+    if not self.petRestoreTimer then
+        self.petRestoreFrame:Hide()
+        return
+    end
+
+    self.petRestoreTimer = self.petRestoreTimer - elapsed
+    if self.petRestoreTimer > 0 then
+        return
+    end
+
+    self.petRestoreTimer = nil
+    local shouldHide = self.petWasTemporarilyShown
+    self.petWasTemporarilyShown = false
+    self.petRestoreFrame:Hide()
+    if shouldHide and Addon.Pet and Addon.Pet.frame and Addon.Pet.frame:IsShown() then
+        Addon.Pet:Hide(true)
     end
 end
 
@@ -452,6 +490,13 @@ function Analyzer:Create(parent)
     end)
     self.progressFrame = progressOverlay
 
+    local petRestoreFrame = CreateFrame("Frame", nil, UIParent)
+    petRestoreFrame:SetScript("OnUpdate", function(_, elapsed)
+        Analyzer:UpdatePetRestore(elapsed)
+    end)
+    petRestoreFrame:Hide()
+    self.petRestoreFrame = petRestoreFrame
+
     local status = progressOverlay:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     status:SetPoint("TOP", progressOverlay, "TOP", 0, 0)
     status:SetText("Opening your spellbook...")
@@ -483,13 +528,23 @@ function Analyzer:Create(parent)
     averageLabel:SetPoint("TOP", results, "TOP", 0, -2)
     averageLabel:SetText("AVERAGE UTILITY SCORE")
 
-    local grade = results:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
-    grade:SetPoint("TOP", averageLabel, "BOTTOM", 0, -2)
+    local gradeBadge = CreateFrame("Frame", nil, results)
+    gradeBadge:SetWidth(46)
+    gradeBadge:SetHeight(46)
+    gradeBadge:SetPoint("TOP", averageLabel, "BOTTOM", 0, -5)
+    SetBackdrop(gradeBadge, { 0.025, 0.030, 0.040, 1 }, { 0.38, 0.42, 0.48, 1 })
+    self.gradeBadge = gradeBadge
+
+    local grade = gradeBadge:CreateFontString(nil, "OVERLAY")
+    grade:SetFont("Fonts\\FRIZQT__.TTF", 27, "OUTLINE")
+    grade:SetPoint("CENTER", gradeBadge, "CENTER", 2, -1)
+    grade:SetShadowColor(0, 0, 0, 1)
+    grade:SetShadowOffset(1, -1)
     grade:SetText("--")
     self.gradeText = grade
 
     local summary = results:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    summary:SetPoint("TOP", grade, "BOTTOM", 0, -5)
+    summary:SetPoint("TOP", gradeBadge, "BOTTOM", 0, -7)
     summary:SetWidth(400)
     summary:SetJustifyH("CENTER")
     self.summaryText = summary

@@ -285,13 +285,13 @@ function Pet:Show()
     end
 end
 
-function Pet:Hide()
+function Pet:Hide(keepAnalyzerOpen)
     if not self.frame then
         return
     end
     Addon.db.pet.shown = false
     self.frame:Hide()
-    if Addon.Analyzer then
+    if Addon.Analyzer and not keepAnalyzerOpen then
         if Addon.Analyzer.running and Addon.Analyzer.Cancel then
             Addon.Analyzer:Cancel()
         elseif Addon.Analyzer.frame and Addon.Analyzer.frame:IsShown() then

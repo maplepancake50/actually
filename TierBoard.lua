@@ -28,8 +28,45 @@ local CARD_GAP = 5
 local CONTENT_WIDTH = 842
 local ROW_WIDTH = 928
 local RANKED_VIEW_HEIGHT = 382
-local POOL_ROW_HEIGHT = 198
+local POOL_ROW_HEIGHT = 124
 local RANKED_TIERS = { "S", "A", "B", "C", "D" }
+local NAV_SECTIONS = {
+    {
+        key = "tier",
+        label = "TIER LIST",
+        title = "Tier List",
+        icon = "Interface\\AddOns\\actually\\Textures\\TabIconTier",
+        color = { 0.66, 0.16, 0.10 },
+        border = { 1.00, 0.52, 0.18 },
+    },
+    {
+        key = "gear",
+        label = "GEAR",
+        title = "Gear",
+        icon = "Interface\\AddOns\\actually\\Textures\\TabIconGear",
+        description = "Equipment sets, upgrade paths and gearing notes will live here.",
+        color = { 0.10, 0.32, 0.62 },
+        border = { 0.28, 0.78, 1.00 },
+    },
+    {
+        key = "leveling",
+        label = "LEVELING",
+        title = "Levelling Specs",
+        icon = "Interface\\AddOns\\actually\\Textures\\TabIconLeveling",
+        description = "Level-by-level specialisation routes and milestone notes will live here.",
+        color = { 0.16, 0.50, 0.18 },
+        border = { 0.58, 1.00, 0.30 },
+    },
+    {
+        key = "cache",
+        label = "CACHE TIPS",
+        title = "Cache Tips",
+        icon = "Interface\\AddOns\\actually\\Textures\\TabIconCache",
+        description = "Short cache strategies, reminders and discoveries will live here.",
+        color = { 0.34, 0.16, 0.56 },
+        border = { 0.48, 0.80, 1.00 },
+    },
+}
 local SPELL_CATEGORIES = {
     "CC", "Defensive", "Immunity", "Interrupt", "Mobility", "Other",
 }
@@ -44,6 +81,214 @@ end
 
 function Board:GetSpellCategories()
     return SPELL_CATEGORIES
+end
+
+function Board:RefreshSectionTabs()
+    if not self.sectionTabs then
+        return
+    end
+
+    for _, section in ipairs(NAV_SECTIONS) do
+        local tab = self.sectionTabs[section.key]
+        local active = self.activeSection == section.key
+        local red = math.min(1, section.color[1] + (active and 0.13 or 0))
+        local green = math.min(1, section.color[2] + (active and 0.13 or 0))
+        local blue = math.min(1, section.color[3] + (active and 0.13 or 0))
+        tab:ClearAllPoints()
+        tab:SetWidth(228)
+        tab:SetHeight(56)
+        tab:SetPoint("BOTTOMLEFT", self.sectionRail, "BOTTOMLEFT", tab.offsetX, 5)
+        tab:SetBackdropColor(red, green, blue, 0.98)
+        tab:SetBackdropBorderColor(
+            section.border[1],
+            section.border[2],
+            section.border[3],
+            active and 1 or 0.58
+        )
+        tab.icon:SetAlpha(active and 1 or 0.80)
+        tab.label:SetTextColor(1, 1, 1, active and 1 or 0.76)
+        tab.activeGlow:SetAlpha(active and 0.08 or 0)
+        for _, glowEdge in ipairs(tab.glowEdges) do
+            glowEdge:SetVertexColor(section.border[1], section.border[2], section.border[3], 1)
+            glowEdge:SetAlpha(active and 0.95 or 0)
+        end
+    end
+end
+
+function Board:SetSection(sectionKey)
+    local selected
+    for _, section in ipairs(NAV_SECTIONS) do
+        if section.key == sectionKey then
+            selected = section
+            break
+        end
+    end
+    if not selected then
+        return
+    end
+
+    self.activeSection = selected.key
+    if selected.key == "tier" then
+        self.sectionPanel:Hide()
+    else
+        self.sectionPanel.icon:SetTexture(selected.icon)
+        self.sectionPanel.title:SetText(selected.title)
+        self.sectionPanel.description:SetText(selected.description)
+        self.sectionPanel:SetBackdropBorderColor(
+            selected.border[1], selected.border[2], selected.border[3], 1
+        )
+        self.sectionPanel:Show()
+    end
+    self:RefreshSectionTabs()
+end
+
+function Board:CreateSectionNavigation(closeButton)
+    local frame = self.frame
+    local panel = CreateFrame("Frame", nil, frame)
+    panel:SetPoint("TOPLEFT", frame, "TOPLEFT", 5, -5)
+    panel:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -5, 5)
+    panel:SetFrameLevel(frame:GetFrameLevel() + 20)
+    panel:EnableMouse(true)
+    panel:RegisterForDrag("LeftButton")
+    panel:SetScript("OnDragStart", function()
+        frame:StartMoving()
+    end)
+    panel:SetScript("OnDragStop", function()
+        frame:StopMovingOrSizing()
+    end)
+    SetBackdrop(panel, { 0.025, 0.030, 0.045, 0.995 }, { 0.25, 0.72, 1.00, 1 })
+
+    local icon = panel:CreateTexture(nil, "ARTWORK")
+    icon:SetWidth(128)
+    icon:SetHeight(128)
+    icon:SetPoint("CENTER", panel, "CENTER", 0, 78)
+    panel.icon = icon
+
+    local title = panel:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
+    title:SetPoint("TOP", icon, "BOTTOM", 0, -20)
+    panel.title = title
+
+    local description = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    description:SetPoint("TOP", title, "BOTTOM", 0, -16)
+    description:SetWidth(540)
+    description:SetJustifyH("CENTER")
+    description:SetJustifyV("TOP")
+    panel.description = description
+
+    local hint = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    hint:SetPoint("TOP", description, "BOTTOM", 0, -20)
+    hint:SetText("Section ready for content")
+    hint:SetTextColor(0.52, 0.62, 0.72)
+
+    self.sectionPanel = panel
+
+    local rail = CreateFrame("Frame", nil, frame)
+    rail:SetWidth(952)
+    rail:SetHeight(68)
+    rail:SetPoint("BOTTOM", frame, "BOTTOM", 0, 8)
+    rail:SetFrameLevel(frame:GetFrameLevel() + 24)
+    rail:EnableMouse(true)
+    rail:RegisterForDrag("LeftButton")
+    rail:SetScript("OnDragStart", function()
+        frame:StartMoving()
+    end)
+    rail:SetScript("OnDragStop", function()
+        frame:StopMovingOrSizing()
+    end)
+    SetBackdrop(rail, { 0.025, 0.030, 0.045, 0.995 }, { 0.20, 0.55, 0.75, 1 })
+
+    local railInset = rail:CreateTexture(nil, "BACKGROUND")
+    railInset:SetPoint("TOPLEFT", rail, "TOPLEFT", 8, -5)
+    railInset:SetPoint("TOPRIGHT", rail, "TOPRIGHT", -8, -5)
+    railInset:SetHeight(3)
+    railInset:SetTexture("Interface\\Buttons\\WHITE8X8")
+    railInset:SetVertexColor(0.20, 0.55, 0.75, 0.32)
+    self.sectionRail = rail
+
+    self.sectionTabs = {}
+    for index, section in ipairs(NAV_SECTIONS) do
+        local sectionInfo = section
+        local tab = CreateFrame("Button", nil, rail)
+        tab:SetWidth(228)
+        tab:SetHeight(56)
+        tab:SetFrameLevel(frame:GetFrameLevel() + 30)
+        tab.offsetX = 8 + (index - 1) * 234
+        SetBackdrop(tab, { sectionInfo.color[1], sectionInfo.color[2], sectionInfo.color[3], 0.98 }, sectionInfo.border)
+
+        local spine = tab:CreateTexture(nil, "BACKGROUND")
+        spine:SetPoint("BOTTOMLEFT", tab, "BOTTOMLEFT", 5, 4)
+        spine:SetPoint("BOTTOMRIGHT", tab, "BOTTOMRIGHT", -5, 4)
+        spine:SetHeight(5)
+        spine:SetTexture("Interface\\Buttons\\WHITE8X8")
+        spine:SetVertexColor(sectionInfo.color[1] * 0.45, sectionInfo.color[2] * 0.45, sectionInfo.color[3] * 0.45, 1)
+
+        local activeGlow = tab:CreateTexture(nil, "BACKGROUND")
+        activeGlow:SetAllPoints(tab)
+        activeGlow:SetTexture("Interface\\Buttons\\WHITE8X8")
+        activeGlow:SetVertexColor(sectionInfo.border[1], sectionInfo.border[2], sectionInfo.border[3], 1)
+        tab.activeGlow = activeGlow
+
+        local glowTop = tab:CreateTexture(nil, "OVERLAY")
+        glowTop:SetPoint("BOTTOMLEFT", tab, "TOPLEFT", -3, -1)
+        glowTop:SetPoint("BOTTOMRIGHT", tab, "TOPRIGHT", 3, -1)
+        glowTop:SetHeight(4)
+
+        local glowBottom = tab:CreateTexture(nil, "OVERLAY")
+        glowBottom:SetPoint("TOPLEFT", tab, "BOTTOMLEFT", -3, 1)
+        glowBottom:SetPoint("TOPRIGHT", tab, "BOTTOMRIGHT", 3, 1)
+        glowBottom:SetHeight(4)
+
+        local glowLeft = tab:CreateTexture(nil, "OVERLAY")
+        glowLeft:SetPoint("TOPRIGHT", tab, "TOPLEFT", 1, 3)
+        glowLeft:SetPoint("BOTTOMRIGHT", tab, "BOTTOMLEFT", 1, -3)
+        glowLeft:SetWidth(4)
+
+        local glowRight = tab:CreateTexture(nil, "OVERLAY")
+        glowRight:SetPoint("TOPLEFT", tab, "TOPRIGHT", -1, 3)
+        glowRight:SetPoint("BOTTOMLEFT", tab, "BOTTOMRIGHT", -1, -3)
+        glowRight:SetWidth(4)
+
+        tab.glowEdges = { glowTop, glowBottom, glowLeft, glowRight }
+        for _, glowEdge in ipairs(tab.glowEdges) do
+            glowEdge:SetTexture("Interface\\Buttons\\WHITE8X8")
+            glowEdge:SetBlendMode("ADD")
+            glowEdge:SetAlpha(0)
+        end
+
+        local tabIcon = tab:CreateTexture(nil, "ARTWORK")
+        tabIcon:SetWidth(42)
+        tabIcon:SetHeight(42)
+        tabIcon:SetPoint("LEFT", tab, "LEFT", 18, 1)
+        tabIcon:SetTexture(sectionInfo.icon)
+        tab.icon = tabIcon
+
+        local label = tab:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        label:SetPoint("LEFT", tabIcon, "RIGHT", 12, 0)
+        label:SetWidth(140)
+        label:SetJustifyH("LEFT")
+        label:SetText(sectionInfo.label)
+        tab.label = label
+
+        tab:SetScript("OnClick", function()
+            Board:SetSection(sectionInfo.key)
+        end)
+        tab:SetScript("OnEnter", function(self)
+            self:SetBackdropBorderColor(1, 1, 1, 1)
+            GameTooltip:SetOwner(self, "ANCHOR_TOP")
+            GameTooltip:SetText(sectionInfo.title, sectionInfo.border[1], sectionInfo.border[2], sectionInfo.border[3])
+            GameTooltip:Show()
+        end)
+        tab:SetScript("OnLeave", function()
+            GameTooltip:Hide()
+            Board:RefreshSectionTabs()
+        end)
+        self.sectionTabs[sectionInfo.key] = tab
+    end
+
+    closeButton:SetFrameLevel(frame:GetFrameLevel() + 32)
+    self.activeSection = "tier"
+    panel:Hide()
+    self:RefreshSectionTabs()
 end
 
 local function NormalizeCategory(category)
@@ -1969,8 +2214,8 @@ function Board:Create()
     end)
 
     local footer = CreateFrame("Frame", nil, frame)
-    footer:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 12, 8)
-    footer:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 8)
+    footer:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 12, 80)
+    footer:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 80)
     footer:SetHeight(34)
     SetBackdrop(footer, { 0.035, 0.04, 0.055, 0.96 }, { 0.13, 0.32, 0.43, 1 })
 
@@ -2054,5 +2299,6 @@ function Board:Create()
     self:RefreshListControls()
     self:Layout()
     self:CreateSpellEditor()
+    self:CreateSectionNavigation(close)
     frame:Hide()
 end
