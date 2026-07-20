@@ -1886,7 +1886,7 @@ function Board:Create()
 
     local petCheckboxLabel = petCheckbox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     petCheckboxLabel:SetPoint("LEFT", petCheckbox, "RIGHT", 2, 1)
-    petCheckboxLabel:SetText("Show pet")
+    petCheckboxLabel:SetText("actually")
 
     reset:SetParent(footer)
     addSpell:SetParent(footer)
