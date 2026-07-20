@@ -29,7 +29,8 @@ local defaults = {
         angle = 225,
     },
     pet = {
-        shown = true,
+        shown = false,
+        visibilityVersion = 1,
         x = 360,
         y = -180,
         scale = 1,
@@ -169,7 +170,15 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
         return
     end
 
+    local previousPetVisibilityVersion = type(ActuallyDB) == "table"
+        and type(ActuallyDB.pet) == "table"
+        and ActuallyDB.pet.visibilityVersion
+
     ActuallyDB = CopyDefaults(defaults, ActuallyDB)
+    if previousPetVisibilityVersion ~= 1 then
+        ActuallyDB.pet.shown = false
+        ActuallyDB.pet.visibilityVersion = 1
+    end
     InitializeListStorage(ActuallyDB)
     Addon.db = ActuallyDB
 

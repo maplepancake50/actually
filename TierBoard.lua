@@ -1379,7 +1379,7 @@ function Board:Create()
 
     local frame = CreateFrame("Frame", "ActuallyTierBoardFrame", UIParent)
     frame:SetWidth(980)
-    frame:SetHeight(710)
+    frame:SetHeight(738)
     frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     frame:SetFrameStrata("DIALOG")
     frame:SetMovable(true)
@@ -1516,6 +1516,26 @@ function Board:Create()
     transfer:SetScript("OnClick", function()
         Board:ShowTransferFrame()
     end)
+
+    local petCheckbox = CreateFrame("CheckButton", "ActuallyShowPetCheckButton", frame, "UICheckButtonTemplate")
+    petCheckbox:SetWidth(24)
+    petCheckbox:SetHeight(24)
+    petCheckbox:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 14, 8)
+    petCheckbox:SetChecked(Addon.db.pet.shown == true)
+
+    local petCheckboxLabel = petCheckbox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    petCheckboxLabel:SetPoint("LEFT", petCheckbox, "RIGHT", 2, 1)
+    petCheckboxLabel:SetText("Show pet")
+
+    petCheckbox:SetScript("OnClick", function(self)
+        if self:GetChecked() then
+            Addon.Pet:Show()
+            Addon.Pet:Play("happy")
+        else
+            Addon.Pet:Hide()
+        end
+    end)
+    self.petCheckbox = petCheckbox
 
     self.rows = {}
     self.rankedArea = self:CreateScrollArea(frame, 952, RANKED_VIEW_HEIGHT)
