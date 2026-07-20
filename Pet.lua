@@ -58,12 +58,11 @@ local CHATTER = {
 }
 
 local DRAG_CHATTER = {
-    "wheee!",
-    "I can fly!",
+    "flying now",
     "where are we going?",
-    "hold onto my glasses!",
-    "up we go!",
-    "tiny taxi!",
+    "where is cache?",
+    "summon pls",
+    "my hs is on cooldown",
 }
 
 local function RandomBlinkDelay()
