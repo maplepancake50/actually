@@ -7,6 +7,8 @@ Addon.Pet = Pet
 local PET_SIZE = 128
 local SHEET_COLUMNS = 4
 local SHEET_ROWS = 4
+local MAIN_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPet"
+local EXTRAS_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetExtras"
 
 local ANIMATIONS = {
     blink = {
@@ -37,6 +39,17 @@ local ANIMATIONS = {
         frames = { 1, 13, 14, 13, 1 },
         durations = { 0.12, 0.16, 0.22, 0.16, 0.12 },
     },
+    drag = {
+        sheet = "extras",
+        frames = { 1, 2, 3, 4, 5, 6, 7, 8 },
+        durations = { 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10 },
+        loop = true,
+    },
+    crows = {
+        sheet = "extras",
+        frames = { 9, 10, 11, 12, 13, 14, 15, 16 },
+        durations = { 0.16, 0.16, 0.16, 0.16, 0.16, 0.16, 0.16, 0.20 },
+    },
 }
 
 local CHATTER = {
@@ -48,6 +61,15 @@ local CHATTER = {
     "RAT MODELZ",
     "@pika",
     "going cache?",
+}
+
+local DRAG_CHATTER = {
+    "wheee!",
+    "I can fly!",
+    "where are we going?",
+    "hold onto my glasses!",
+    "up we go!",
+    "tiny taxi!",
 }
 
 local function RandomBlinkDelay()
@@ -82,6 +104,15 @@ function Pet:SetSpriteFrame(frameNumber)
     )
 end
 
+function Pet:SetSheet(sheet)
+    if not self.texture or self.currentSheet == sheet then
+        return
+    end
+
+    self.currentSheet = sheet
+    self.texture:SetTexture(sheet == "extras" and EXTRAS_SHEET or MAIN_SHEET)
+end
+
 function Pet:ResetTimers()
     self.blinkTimer = RandomBlinkDelay()
     self.sneezeTimer = RandomSneezeDelay()
@@ -92,12 +123,14 @@ end
 function Pet:PlayPassiveEmote()
     self.blinkTimer = RandomBlinkDelay()
     local roll = math.random(1, 100)
-    if roll <= 50 then
+    if roll <= 44 then
         self:Play("perky")
-    elseif roll <= 78 then
+    elseif roll <= 70 then
         self:Play("curious")
-    else
+    elseif roll <= 90 then
         self:Play("doubleBlink")
+    else
+        self:Play("crows")
     end
 end
 
@@ -111,6 +144,7 @@ function Pet:Play(name)
     self.animationName = name
     self.animationIndex = 1
     self.animationRemaining = animation.durations[1]
+    self:SetSheet(animation.sheet or "main")
     self:SetSpriteFrame(animation.frames[1])
 end
 
@@ -120,6 +154,7 @@ function Pet:FinishAnimation()
     self.animationIndex = nil
     self.animationRemaining = nil
     self.idleClock = 0
+    self:SetSheet("main")
     self:SetSpriteFrame(1)
 end
 
@@ -146,7 +181,13 @@ function Pet:UpdateAnimation(elapsed)
     while self.animation and self.animationRemaining <= 0 do
         self.animationIndex = self.animationIndex + 1
         if self.animationIndex > #self.animation.frames then
-            self:FinishAnimation()
+            if self.animation.loop then
+                self.animationIndex = 1
+                self:SetSpriteFrame(self.animation.frames[1])
+                self.animationRemaining = self.animationRemaining + self.animation.durations[1]
+            else
+                self:FinishAnimation()
+            end
         else
             self:SetSpriteFrame(self.animation.frames[self.animationIndex])
             self.animationRemaining = self.animationRemaining + self.animation.durations[self.animationIndex]
@@ -291,9 +332,9 @@ function Pet:Create()
 
     local texture = button:CreateTexture(nil, "ARTWORK")
     texture:SetAllPoints(button)
-    texture:SetTexture("Interface\\AddOns\\actually\\Textures\\ActuallyPet")
     self.texture = texture
     self.frame = button
+    self:SetSheet("main")
     self:SetSpriteFrame(1)
     self:CreateBubble(button)
     self:ApplyPosition()
@@ -310,14 +351,15 @@ function Pet:Create()
     button:SetScript("OnDragStart", function(self)
         Pet.wasDragged = true
         self:StartMoving()
-        Pet:Play("happy")
-        Pet:ShowBubble("wheee!", 1.2)
+        Pet:Play("drag")
+        Pet:ShowBubble(DRAG_CHATTER[math.random(1, #DRAG_CHATTER)], 1.4)
         GameTooltip:Hide()
     end)
 
     button:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
         Pet:SavePosition()
+        Pet:Play("happy")
     end)
 
     button:SetScript("OnClick", function(_, mouseButton)
