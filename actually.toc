@@ -9,5 +9,6 @@ Core.lua
 Official.lua
 Discussion.lua
 TierBoard.lua
+Sync.lua
 MinimapButton.lua
 Pet.lua

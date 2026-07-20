@@ -3,20 +3,68 @@ local Addon = Actually
 
 local Official = {}
 Addon.Official = Official
+local Trim = Addon.Util.Trim
+local NormalizeIdentity = Addon.Util.NormalizeIdentity
 
 local OFFICER_COMMAND = "council cachekeeper"
 local OFFICER_REVOKE_COMMAND = OFFICER_COMMAND .. " off"
 local AUDIT_LIMIT = 100
-local MESSAGE_PREFIX = "ACTUALLY"
+local MESSAGE_PREFIX = Addon.MESSAGE_PREFIX
+-- Coordination token only; Lua source is client-readable and this is not security.
 local AUTH_TOKEN = "cachekeeper-v1"
 
-local function Trim(value)
-    return string.gsub(value or "", "^%s*(.-)%s*$", "%1")
+-- The baseline is the pre-operation official board. Operations are immutable
+-- and replayed in Lamport order, so independent concurrent moves both survive.
+local function CopyBoard(source)
+    local board = {}
+    local assigned = {}
+    for _, tier in ipairs(Addon.tierOrder) do
+        board[tier] = {}
+        for _, key in ipairs(type(source) == "table" and type(source[tier]) == "table" and source[tier] or {}) do
+            key = tostring(key)
+            if not assigned[key] then
+                table.insert(board[tier], key)
+                assigned[key] = true
+            end
+        end
+    end
+    return board
 end
 
-local function NormalizeIdentity(identity)
-    identity = string.gsub(Trim(identity), "%s+", "")
-    return string.lower(identity)
+local function FindPlacement(board, wantedKey)
+    wantedKey = tostring(wantedKey)
+    for _, tier in ipairs(Addon.tierOrder) do
+        for index, key in ipairs(board[tier] or {}) do
+            if tostring(key) == wantedKey then
+                return tier, index
+            end
+        end
+    end
+end
+
+local function RemovePlacement(board, wantedKey)
+    local tier, index = FindPlacement(board, wantedKey)
+    if tier then
+        table.remove(board[tier], index)
+    end
+end
+
+local function ValidTier(wantedTier)
+    for _, tier in ipairs(Addon.tierOrder) do
+        if tier == wantedTier then
+            return tier
+        end
+    end
+    return "U"
+end
+
+local function OperationLess(left, right)
+    local leftClock = tonumber(left.clock) or 0
+    local rightClock = tonumber(right.clock) or 0
+    if leftClock ~= rightClock then
+        return leftClock < rightClock
+    end
+    return tostring(left.id) < tostring(right.id)
 end
 
 function Official:GetPlayerIdentity()
@@ -137,7 +185,10 @@ function Official:GrantOfficer(target)
     end
 
     Addon.db.authority.officers[targetKey] = true
-    self:RecordChange("Granted official edit access to " .. displayIdentity .. ".")
+    self:RecordActivity("Granted official edit access to " .. displayIdentity .. ".")
+    if Addon.Sync then
+        Addon.Sync:MarkDirty(true)
+    end
     self:SendAuthorization("GRANT", targetKey, whisperTarget)
     Addon:Print("Officer grant sent to " .. displayIdentity .. ". They must be online with actually loaded.")
     return true
@@ -156,7 +207,10 @@ function Official:RevokeOfficer(target)
     end
 
     Addon.db.authority.officers[targetKey] = nil
-    self:RecordChange("Revoked official edit access from " .. displayIdentity .. ".")
+    self:RecordActivity("Revoked official edit access from " .. displayIdentity .. ".")
+    if Addon.Sync then
+        Addon.Sync:MarkDirty(true)
+    end
     self:SendAuthorization("REVOKE", targetKey, whisperTarget)
     Addon:Print("Officer revoke sent to " .. displayIdentity .. ".")
     return true
@@ -175,28 +229,186 @@ function Official:HandleOwnerCommand(rawMessage, lowerMessage)
     return false
 end
 
-function Official:RecordChange(action, author)
-    if not self:IsOfficer() then
-        return false
+function Official:EnsureOperationState()
+    local official = Addon.db.lists.official
+    official.baseBoard = type(official.baseBoard) == "table" and official.baseBoard or CopyBoard(official.board)
+    official.baseRevision = tonumber(official.baseRevision) or tonumber(official.revision) or 0
+    official.baseLastModifiedAt = tonumber(official.baseLastModifiedAt) or tonumber(official.lastModifiedAt) or 0
+    official.operations = type(official.operations) == "table" and official.operations or {}
+    official.operationClock = tonumber(official.operationClock) or 0
+    official.operationStateVersion = 1
+    return official
+end
+
+function Official:RebuildBoard()
+    local official = self:EnsureOperationState()
+    local board = CopyBoard(official.baseBoard)
+    local operations = {}
+    local highestClock = tonumber(official.operationClock) or 0
+    for id, operation in pairs(official.operations) do
+        if type(operation) == "table" then
+            operation.id = tostring(operation.id or id)
+            highestClock = math.max(highestClock, tonumber(operation.clock) or 0)
+            table.insert(operations, operation)
+        end
+    end
+    table.sort(operations, OperationLess)
+
+    for _, operation in ipairs(operations) do
+        if operation.kind == "RESET" then
+            board = CopyBoard({})
+        elseif operation.kind == "REMOVE" then
+            RemovePlacement(board, operation.key)
+        elseif operation.kind == "MOVE" and operation.key then
+            local key = tostring(operation.key)
+            local tier = ValidTier(operation.tier)
+            RemovePlacement(board, key)
+            local destination = board[tier]
+            local insertAt
+            if operation.before and operation.before ~= "" then
+                local beforeTier, beforeIndex = FindPlacement(board, operation.before)
+                if beforeTier == tier then
+                    insertAt = beforeIndex
+                end
+            end
+            if not insertAt and operation.after and operation.after ~= "" then
+                local afterTier, afterIndex = FindPlacement(board, operation.after)
+                if afterTier == tier then
+                    insertAt = afterIndex + 1
+                end
+            end
+            table.insert(destination, math.max(1, math.min(insertAt or (#destination + 1), #destination + 1)), key)
+        end
     end
 
-    local official = Addon.db.lists.official
-    official.revision = (tonumber(official.revision) or 0) + 1
-    official.audit = type(official.audit) == "table" and official.audit or {}
+    official.board = board
+    official.operationClock = highestClock
+    official.revision = (tonumber(official.baseRevision) or 0) + #operations
+    local latest = operations[#operations]
+    if latest then
+        official.lastModifiedBy = latest.author
+        official.lastModifiedAt = tonumber(latest.timestamp) or 0
+    else
+        official.lastModifiedBy = official.baseLastModifiedBy
+        official.lastModifiedAt = tonumber(official.baseLastModifiedAt) or 0
+    end
+    return board
+end
 
+function Official:NewOperation(kind, fields, author)
+    local official = self:EnsureOperationState()
+    official.operationClock = (tonumber(official.operationClock) or 0) + 1
+    author = author or self:GetPlayerIdentity()
+    local id = tostring(official.operationClock) .. "." .. NormalizeIdentity(author) .. "." .. tostring(math.random(100000, 999999))
+    local operation = {
+        id = id,
+        clock = official.operationClock,
+        author = author,
+        timestamp = time and time() or 0,
+        kind = kind,
+    }
+    for key, value in pairs(fields or {}) do
+        operation[key] = value
+    end
+    official.operations[id] = operation
+    return operation
+end
+
+function Official:AddAuditEntry(action, author, activity)
+    local official = self:EnsureOperationState()
+    official.audit = type(official.audit) == "table" and official.audit or {}
     local entry = {
-        revision = official.revision,
+        id = Addon.Util.NewPersistentID(),
+        revision = tonumber(official.revision) or 0,
         author = author or self:GetPlayerIdentity(),
         timestamp = time and time() or 0,
         action = tostring(action or "Updated the official tier list."),
+        activity = activity == true or nil,
     }
     table.insert(official.audit, entry)
     while #official.audit > AUDIT_LIMIT do
         table.remove(official.audit, 1)
     end
+    return entry
+end
 
-    official.lastModifiedBy = entry.author
-    official.lastModifiedAt = entry.timestamp
+function Official:RecordBoardChange(action, newBoard, changedKeys, author)
+    if not self:IsOfficer() then
+        return false
+    end
+
+    local official = self:EnsureOperationState()
+    newBoard = CopyBoard(newBoard)
+    if type(changedKeys) ~= "table" then
+        changedKeys = changedKeys and { tostring(changedKeys) } or {}
+    end
+    if #changedKeys == 0 then
+        local seen = {}
+        for _, board in ipairs({ official.board or {}, newBoard }) do
+            for _, tier in ipairs(Addon.tierOrder) do
+                for _, key in ipairs(board[tier] or {}) do
+                    seen[tostring(key)] = true
+                end
+            end
+        end
+        for key in pairs(seen) do
+            local oldTier, oldIndex = FindPlacement(official.board or {}, key)
+            local newTier, newIndex = FindPlacement(newBoard, key)
+            if oldTier ~= newTier or oldIndex ~= newIndex then
+                table.insert(changedKeys, key)
+            end
+        end
+        table.sort(changedKeys)
+    end
+
+    local madeOperation = false
+    for _, key in ipairs(changedKeys) do
+        key = tostring(key)
+        local tier, index = FindPlacement(newBoard, key)
+        if tier then
+            local row = newBoard[tier]
+            self:NewOperation("MOVE", {
+                key = key,
+                tier = tier,
+                before = row[index + 1],
+                after = row[index - 1],
+            }, author)
+        else
+            self:NewOperation("REMOVE", { key = key }, author)
+        end
+        madeOperation = true
+    end
+    if not madeOperation then
+        return false
+    end
+
+    self:RebuildBoard()
+    self:AddAuditEntry(action, author, false)
+    if Addon.Sync then
+        Addon.Sync:MarkDirty(true)
+    end
+    return true
+end
+
+function Official:RecordBoardReset(action, author)
+    if not self:IsOfficer() then
+        return false
+    end
+    self:NewOperation("RESET", nil, author)
+    self:RebuildBoard()
+    self:AddAuditEntry(action, author, false)
+    if Addon.Sync then
+        Addon.Sync:MarkDirty(true)
+    end
+    return true
+end
+
+function Official:RecordActivity(action, author)
+    if not self:IsOfficer() then
+        return false
+    end
+
+    self:AddAuditEntry(action or "Officer discussion activity.", author, true)
     return true
 end
 

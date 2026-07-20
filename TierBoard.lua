@@ -3,6 +3,7 @@ local Addon = Actually
 
 local Board = {}
 Addon.Board = Board
+local SetBackdrop = Addon.Util.SetBackdrop
 
 local TIER_COLORS = {
     S = { 0.85, 0.25, 0.25 },
@@ -55,19 +56,6 @@ local function NormalizeCategory(category)
     end
 
     return "Other"
-end
-
-local function SetBackdrop(frame, color, borderColor)
-    frame:SetBackdrop({
-        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-        tile = true,
-        tileSize = 16,
-        edgeSize = 12,
-        insets = { left = 3, right = 3, top = 3, bottom = 3 },
-    })
-    frame:SetBackdropColor(color[1], color[2], color[3], color[4] or 1)
-    frame:SetBackdropBorderColor(borderColor[1], borderColor[2], borderColor[3], borderColor[4] or 1)
 end
 
 local function CreateTierLabel(row, tier, text, fontObject)
@@ -244,6 +232,7 @@ function Board:BuildCustomSpell(spellID, saved)
     }
 end
 
+-- Catalog and persisted custom-spell metadata
 function Board:BuildCatalog()
     self.catalog = {}
     self.spellsByKey = {}
@@ -253,6 +242,7 @@ function Board:BuildCatalog()
         if spellID then
             saved.category = NormalizeCategory(saved.category)
             saved.coa = saved.coa == true
+            saved.updatedAt = tonumber(saved.updatedAt) or 0
             local spell = self:BuildCustomSpell(spellID, saved)
             if spell then
                 table.insert(self.catalog, spell)
@@ -277,7 +267,9 @@ function Board:UpsertCustomSpell(spellID, category, coa)
         id = spellID,
         category = NormalizeCategory(category),
         coa = coa == true,
+        updatedAt = time and time() or 0,
     }
+    Addon.db.spellTombstones[savedKey] = nil
 
     local key = "spell:" .. savedKey
     local spell = self:BuildCustomSpell(spellID, Addon.db.customSpells[savedKey])
@@ -315,7 +307,10 @@ function Board:AddCustomSpell(spellID, category, coa)
     end
 
     self:SortPool()
-    self:SaveState("Added or updated " .. spell.name .. " (spell ID " .. tostring(spell.spellID) .. ").")
+    self:SaveState("Added or updated " .. spell.name .. " (spell ID " .. tostring(spell.spellID) .. ").", spell.key)
+    if Addon.Sync and not Addon:IsOfficialList() then
+        Addon.Sync:MarkDirty(true)
+    end
     self:Layout()
     Addon:Print(spell.name .. " added to the Pool.")
     return true
@@ -343,10 +338,17 @@ function Board:SetCustomSpellCategory(spell, category)
 
     local oldCategory = spell.category
     saved.category = category
+    saved.updatedAt = time and time() or 0
     spell.category = category
 
     self:SortPool()
-    self:SaveState("Changed " .. spell.name .. " category from " .. oldCategory .. " to " .. category .. ".")
+    self:SaveState()
+    if Addon:IsOfficialList() and Addon.Official then
+        Addon.Official:RecordActivity("Changed " .. spell.name .. " category from " .. oldCategory .. " to " .. category .. ".")
+    end
+    if Addon.Sync then
+        Addon.Sync:MarkDirty(true)
+    end
     self:Layout()
     Addon:Print(spell.name .. " category changed to " .. category .. ".")
 end
@@ -372,9 +374,16 @@ function Board:SetCustomSpellCOA(spell, enabled)
     end
 
     saved.coa = enabled
+    saved.updatedAt = time and time() or 0
     spell.coa = enabled
     local action = enabled and "Marked " or "Unmarked "
-    self:SaveState(action .. spell.name .. " as COA.")
+    self:SaveState()
+    if Addon:IsOfficialList() and Addon.Official then
+        Addon.Official:RecordActivity(action .. spell.name .. " as COA.")
+    end
+    if Addon.Sync then
+        Addon.Sync:MarkDirty(true)
+    end
     self:Layout()
     Addon:Print(spell.name .. (enabled and " marked as COA." or " is no longer marked as COA."))
 end
@@ -391,6 +400,7 @@ function Board:DeleteCustomSpell(spell)
 
     local key = spell.key
     Addon.db.customSpells[tostring(spell.spellID)] = nil
+    Addon.db.spellTombstones[tostring(spell.spellID)] = time and time() or 0
 
     for _, tier in ipairs(Addon.tierOrder) do
         for index = #self.state[tier], 1, -1 do
@@ -414,9 +424,41 @@ function Board:DeleteCustomSpell(spell)
     self.cards[key] = nil
     self.spellsByKey[key] = nil
 
-    self:SaveState("Deleted " .. spell.name .. " (spell ID " .. tostring(spell.spellID) .. ").")
+    self:SaveState("Deleted " .. spell.name .. " (spell ID " .. tostring(spell.spellID) .. ").", spell.key)
+    if Addon.Sync and not Addon:IsOfficialList() then
+        Addon.Sync:MarkDirty(true)
+    end
     self:Layout()
     Addon:Print(spell.name .. " deleted. Add ID " .. tostring(spell.spellID) .. " again to restore it.")
+end
+
+function Board:ReloadFromDatabase()
+    local oldCards = self.cards or {}
+    self:BuildCatalog()
+    self.cards = {}
+
+    for _, spell in ipairs(self.catalog) do
+        local card = oldCards[spell.key]
+        if card then
+            card.spell = spell
+            card.icon:SetTexture(spell.icon)
+            card.label:SetText(spell.name)
+            self.cards[spell.key] = card
+            oldCards[spell.key] = nil
+        else
+            self.cards[spell.key] = self:CreateCard(spell)
+        end
+    end
+
+    for _, card in pairs(oldCards) do
+        card:Hide()
+        card:SetParent(UIParent)
+    end
+
+    self:BuildState()
+    self:RefreshListControls()
+    self:RefreshAuditLog()
+    self:Layout()
 end
 
 function Board:ShowSpellContextMenu(card)
@@ -499,15 +541,17 @@ function Board:SnapshotState()
     return board
 end
 
-function Board:SaveState(auditAction)
+function Board:SaveState(auditAction, changedKeys)
     if not Addon:CanEditActiveList() then
         return
     end
 
-    Addon:GetActiveList().board = self:SnapshotState()
+    local snapshot = self:SnapshotState()
     if Addon:IsOfficialList() and auditAction and Addon.Official then
-        Addon.Official:RecordChange(auditAction)
+        Addon.Official:RecordBoardChange(auditAction, snapshot, changedKeys)
         self:RefreshAuditLog()
+    elseif not Addon:IsOfficialList() then
+        Addon:GetActiveList().board = snapshot
     end
 end
 
@@ -526,6 +570,7 @@ function Board:FindSpellLocation(key)
     end
 end
 
+-- Drag/drop placement
 function Board:GetDropTarget(x, y)
     for _, tier in ipairs(Addon.tierOrder) do
         local row = self.rows[tier]
@@ -598,7 +643,7 @@ function Board:StopDrag(card)
         else
             action = "Moved " .. card.spell.name .. " from " .. sourceTier .. " to " .. destinationTier .. "."
         end
-        self:SaveState(action)
+        self:SaveState(action, card.spell.key)
     end
 
     self.dragging = nil
@@ -673,6 +718,7 @@ function Board:CreateCard(spell)
     return card
 end
 
+-- Board rows and scrolling
 function Board:CreateScrollArea(parent, width, height)
     local area = {}
 
@@ -971,13 +1017,11 @@ function Board:CreateContextMenu()
         UIDropDownMenu_AddButton(title, level)
 
         local discussion = UIDropDownMenu_CreateInfo()
-        discussion.text = "Reasoning & Discussion"
+        discussion.text = "Discussion"
         discussion.notCheckable = true
         discussion.func = function()
             CloseDropDownMenus()
-            if Addon.Discussion then
-                Addon.Discussion:Show(spell)
-            end
+            Board:ShowDiscussion(spell)
         end
         UIDropDownMenu_AddButton(discussion, level)
 
@@ -1020,6 +1064,23 @@ function Board:CreateContextMenu()
     end, "MENU")
 
     self.contextMenu = menu
+end
+
+function Board:ShowDiscussion(spell)
+    if not Addon.Discussion or not Addon.Discussion.Show then
+        Addon:Print("Discussion module is not loaded. Try /reload.")
+        return
+    end
+
+    local opened, errorMessage = pcall(Addon.Discussion.Show, Addon.Discussion, spell)
+    if not opened then
+        Addon:Print("Could not open Discussion: " .. tostring(errorMessage))
+        return
+    end
+
+    if not Addon.Discussion.frame or not Addon.Discussion.frame:IsShown() then
+        Addon:Print("Discussion did not open. Try /reload.")
+    end
 end
 
 function Board:CreateSpellEditor()
@@ -1250,7 +1311,7 @@ function Board:RefreshAuditLog()
         row:ClearAllPoints()
         row:SetPoint("TOPLEFT", self.auditArea.canvas, "TOPLEFT", 8, -8)
         row:SetHeight(28)
-        row:SetText("No official-list changes have been recorded yet.")
+        row:SetText("No official-list activity has been recorded yet.")
         row:Show()
         contentHeight = 44
     else
@@ -1272,14 +1333,16 @@ function Board:RefreshAuditLog()
             end
             row:ClearAllPoints()
             row:SetPoint("TOPLEFT", self.auditArea.canvas, "TOPLEFT", 8, -(8 + contentHeight))
-            row:SetHeight(42)
+            local entryHeight = entry.activity and 60 or 42
+            local entryLabel = entry.activity and "Officer Discussion" or ("Revision " .. tostring(entry.revision or "?"))
+            row:SetHeight(entryHeight)
             row:SetText(
-                "|cffffd36aRevision " .. tostring(entry.revision or "?") .. "|r  "
+                "|cffffd36a" .. entryLabel .. "|r  "
                     .. timestamp .. "  |cff69ccf0" .. tostring(entry.author or "Unknown") .. "|r\n"
                     .. tostring(entry.action or "Updated the official tier list.")
             )
             row:Show()
-            contentHeight = contentHeight + 44
+            contentHeight = contentHeight + entryHeight + 2
         end
         contentHeight = contentHeight + 8
     end
@@ -1334,6 +1397,7 @@ function Board:ValidateNewListName(name)
     return name
 end
 
+-- Personal-list persistence and import/export
 function Board:SaveCurrentAs(name)
     name = self:ValidateNewListName(name)
     if not name then
@@ -1447,6 +1511,9 @@ function Board:ImportPersonalList(name, encoded)
 
     Addon.db.lists.personal[name] = { name = name, board = board }
     self:SwitchList("personal", name)
+    if Addon.Sync then
+        Addon.Sync:MarkDirty(true)
+    end
     Addon:Print("Imported " .. tostring(imported) .. " spells into " .. name .. ".")
     if unavailable > 0 then
         Addon:Print(tostring(unavailable) .. " unavailable spell IDs were skipped.")
@@ -1793,7 +1860,7 @@ function Board:Create()
     discussionHint:SetPoint("LEFT", officialBadge, "RIGHT", 14, 0)
     discussionHint:SetWidth(350)
     discussionHint:SetJustifyH("LEFT")
-    discussionHint:SetText("Right click spell for reasoning and discussion")
+    discussionHint:SetText("Right click spell for Discussion")
     discussionHint:SetTextColor(1, 0.78, 0.22)
 
     local crownGlow = officialBadge:CreateTexture(nil, "BACKGROUND")
@@ -1886,7 +1953,7 @@ function Board:Create()
 
     local petCheckboxLabel = petCheckbox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     petCheckboxLabel:SetPoint("LEFT", petCheckbox, "RIGHT", 2, 1)
-    petCheckboxLabel:SetText("actually")
+    petCheckboxLabel:SetText("Arnold")
 
     reset:SetParent(footer)
     addSpell:SetParent(footer)

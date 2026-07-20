@@ -2,16 +2,72 @@ local addonName = ...
 
 Actually = Actually or {}
 local Addon = Actually
+local Util = Addon.Util or {}
+Addon.Util = Util
 
 Addon.name = addonName or "actually"
 Addon.version = "0.1.0"
+Addon.MESSAGE_PREFIX = "ACTUALLY"
 Addon.tierOrder = { "S", "A", "B", "C", "D", "U" }
 Addon.DEFAULT_PERSONAL_LIST_NAME = "My Tier List"
 Addon.OFFICIAL_LIST_NAME = "Official Tier List"
 
+function Util.Trim(value)
+    return string.gsub(tostring(value or ""), "^%s*(.-)%s*$", "%1")
+end
+
+function Util.ShortName(identity)
+    local value = Util.Trim(identity)
+    if value == "" then
+        return "Unknown"
+    end
+    return Util.Trim(string.match(value, "^([^%-]+)") or value)
+end
+
+function Util.NormalizeIdentity(identity)
+    return string.lower(string.gsub(Util.Trim(identity), "%s+", ""))
+end
+
+function Util.NormalizeCharacter(identity)
+    return string.lower(string.gsub(Util.ShortName(identity), "%s+", ""))
+end
+
+function Util.DeepCopy(source)
+    local result = {}
+    if type(source) ~= "table" then
+        return result
+    end
+    for key, value in pairs(source) do
+        result[key] = type(value) == "table" and Util.DeepCopy(value) or value
+    end
+    return result
+end
+
+function Util.NewPersistentID()
+    local timestamp = time and time() or 0
+    return tostring(timestamp) .. "." .. tostring(math.random(100000, 999999))
+end
+
+function Util.SetBackdrop(frame, color, borderColor)
+    frame:SetBackdrop({
+        bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+        edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+        tile = true,
+        tileSize = 16,
+        edgeSize = 12,
+        insets = { left = 3, right = 3, top = 3, bottom = 3 },
+    })
+    frame:SetBackdropColor(color[1], color[2], color[3], color[4] or 1)
+    frame:SetBackdropBorderColor(borderColor[1], borderColor[2], borderColor[3], borderColor[4] or 1)
+end
+
 local defaults = {
-    version = 5,
+    version = 8,
     customSpells = {},
+    spellTombstones = {},
+    sync = {
+        knownPeers = {},
+    },
     discussions = {},
     authority = {
         officers = {},
@@ -23,6 +79,11 @@ local defaults = {
             board = {},
             revision = 0,
             audit = {},
+            baseBoard = {},
+            baseRevision = 0,
+            baseLastModifiedAt = 0,
+            operations = {},
+            operationClock = 0,
         },
     },
     activeList = {
@@ -57,20 +118,19 @@ local function CopyDefaults(source, destination)
     return destination
 end
 
-local function CopyTable(source)
-    local result = {}
-    if type(source) ~= "table" then
-        return result
+local function IsLegacyBoardAudit(entry)
+    if type(entry) ~= "table" or entry.activity then
+        return false
     end
-
-    for key, value in pairs(source) do
-        if type(value) == "table" then
-            result[key] = CopyTable(value)
-        else
-            result[key] = value
-        end
+    local action = string.lower(tostring(entry.action or ""))
+    if string.find(action, "^granted official edit access")
+        or string.find(action, "^revoked official edit access")
+        or string.find(action, "^changed .- category")
+        or string.find(action, "^marked .- as coa")
+        or string.find(action, "^unmarked .- as coa") then
+        return false
     end
-    return result
+    return true
 end
 
 local function InitializeListStorage(db)
@@ -78,14 +138,47 @@ local function InitializeListStorage(db)
     db.lists.personal = type(db.lists.personal) == "table" and db.lists.personal or {}
     db.lists.official = CopyDefaults(defaults.lists.official, db.lists.official)
     db.lists.official.audit = type(db.lists.official.audit) == "table" and db.lists.official.audit or {}
+    local official = db.lists.official
+    if type(official.operations) ~= "table" then
+        official.operations = {}
+    end
+    if type(official.baseBoard) ~= "table" or not official.operationStateVersion then
+        -- Version 7 used one revision for board and authorization activity.
+        -- Recover the last genuine board revision before freezing the baseline.
+        local boardRevision
+        local boardModifiedAt
+        local boardModifiedBy
+        for _, entry in ipairs(official.audit or {}) do
+            if IsLegacyBoardAudit(entry) then
+                local entryRevision = tonumber(entry.revision) or 0
+                local entryTimestamp = tonumber(entry.timestamp) or 0
+                if not boardRevision or entryRevision > boardRevision
+                    or (entryRevision == boardRevision and entryTimestamp > boardModifiedAt) then
+                    boardRevision = entryRevision
+                    boardModifiedAt = entryTimestamp
+                    boardModifiedBy = entry.author
+                end
+            end
+        end
+        official.baseBoard = Util.DeepCopy(official.board)
+        official.baseRevision = boardRevision or tonumber(official.revision) or 0
+        official.baseLastModifiedBy = boardModifiedBy or official.lastModifiedBy
+        official.baseLastModifiedAt = boardModifiedAt or tonumber(official.lastModifiedAt) or 0
+        official.operations = {}
+        official.operationClock = 0
+        official.operationStateVersion = 1
+    end
     db.authority = CopyDefaults(defaults.authority, db.authority)
     db.authority.officers = type(db.authority.officers) == "table" and db.authority.officers or {}
     db.discussions = type(db.discussions) == "table" and db.discussions or {}
+    db.spellTombstones = type(db.spellTombstones) == "table" and db.spellTombstones or {}
+    db.sync = type(db.sync) == "table" and db.sync or {}
+    db.sync.knownPeers = type(db.sync.knownPeers) == "table" and db.sync.knownPeers or {}
 
     if type(db.lists.personal[Addon.DEFAULT_PERSONAL_LIST_NAME]) ~= "table" then
         db.lists.personal[Addon.DEFAULT_PERSONAL_LIST_NAME] = {
             name = Addon.DEFAULT_PERSONAL_LIST_NAME,
-            board = CopyTable(db.board),
+            board = Util.DeepCopy(db.board),
         }
     end
 
@@ -109,7 +202,7 @@ local function InitializeListStorage(db)
     end
 
     db.board = nil
-    db.version = 5
+    db.version = 8
 end
 
 function Addon:GetActiveList()
@@ -152,9 +245,10 @@ function Addon:ResetBoard()
         return
     end
 
-    self:GetActiveList().board = {}
     if self:IsOfficialList() and self.Official then
-        self.Official:RecordChange("Reset every spell placement to the Pool.")
+        self.Official:RecordBoardReset("Reset every spell placement to the Pool.")
+    else
+        self:GetActiveList().board = {}
     end
     if self.Board then
         self.Board:ResetState()
@@ -199,6 +293,9 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
     if Addon.Pet then
         Addon.Pet:Create()
     end
+    if Addon.Sync then
+        Addon.Sync:Initialize()
+    end
 
     SLASH_ACTUALLY1 = "/actually"
     SLASH_ACTUALLY2 = "/act"
@@ -224,6 +321,16 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
         elseif lowerMessage == "pet crows" then
             Addon.Pet:Show()
             Addon.Pet:Play("crows")
+        elseif lowerMessage == "sync" and Addon.Sync then
+            Addon.Sync:PrintStatus(false)
+        elseif lowerMessage == "sync now" and Addon.Sync then
+            Addon.Sync:PrintStatus(true)
+        elseif lowerMessage == "sync debug" and Addon.Sync then
+            Addon.Sync:SetDebug(not Addon.Sync.debugEnabled)
+        elseif lowerMessage == "sync log" and Addon.Sync then
+            Addon.Sync:PrintLog()
+        elseif string.sub(lowerMessage, 1, 10) == "sync pull " and Addon.Sync then
+            Addon.Sync:ForceSync(string.sub(rawMessage, 11))
         elseif Addon.Official and Addon.Official:HandleHiddenCommand(lowerMessage) then
             return
         elseif Addon.Official and Addon.Official:HandleOwnerCommand(rawMessage, lowerMessage) then
