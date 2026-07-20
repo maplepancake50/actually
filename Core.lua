@@ -196,6 +196,9 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
         elseif message == "pet sneeze" then
             Addon.Pet:Show()
             Addon.Pet:Play("sneeze")
+        elseif message == "pet emote" then
+            Addon.Pet:Show()
+            Addon.Pet:PlayPassiveEmote()
         else
             Addon:Toggle()
         end

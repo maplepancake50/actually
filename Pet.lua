@@ -25,6 +25,18 @@ local ANIMATIONS = {
         frames = { 15, 16, 15, 16, 15, 1 },
         durations = { 0.45, 0.50, 0.45, 0.50, 0.35, 0.10 },
     },
+    doubleBlink = {
+        frames = { 5, 6, 7, 8, 5, 6, 7, 8 },
+        durations = { 0.07, 0.07, 0.10, 0.10, 0.07, 0.07, 0.10, 0.12 },
+    },
+    curious = {
+        frames = { 1, 5, 6, 5, 1 },
+        durations = { 0.16, 0.22, 0.32, 0.22, 0.12 },
+    },
+    perky = {
+        frames = { 1, 13, 14, 13, 1 },
+        durations = { 0.12, 0.16, 0.22, 0.16, 0.12 },
+    },
 }
 
 local CHATTER = {
@@ -33,6 +45,9 @@ local CHATTER = {
     "need a tier list?",
     "*adjusts glasses*",
     "I am helping!",
+    "RAT MODELZ",
+    "@pika",
+    "going cache?",
 }
 
 local function RandomBlinkDelay()
@@ -40,11 +55,15 @@ local function RandomBlinkDelay()
 end
 
 local function RandomSneezeDelay()
-    return 22 + math.random() * 28
+    return 42 + math.random() * 34
 end
 
 local function RandomSleepDelay()
-    return 55 + math.random() * 45
+    return 75 + math.random() * 45
+end
+
+local function RandomEmoteDelay()
+    return 16 + math.random() * 18
 end
 
 function Pet:SetSpriteFrame(frameNumber)
@@ -67,6 +86,19 @@ function Pet:ResetTimers()
     self.blinkTimer = RandomBlinkDelay()
     self.sneezeTimer = RandomSneezeDelay()
     self.sleepTimer = RandomSleepDelay()
+    self.emoteTimer = RandomEmoteDelay()
+end
+
+function Pet:PlayPassiveEmote()
+    self.blinkTimer = RandomBlinkDelay()
+    local roll = math.random(1, 100)
+    if roll <= 50 then
+        self:Play("perky")
+    elseif roll <= 78 then
+        self:Play("curious")
+    else
+        self:Play("doubleBlink")
+    end
 end
 
 function Pet:Play(name)
@@ -147,6 +179,7 @@ function Pet:Update(elapsed)
     self.blinkTimer = self.blinkTimer - elapsed
     self.sneezeTimer = self.sneezeTimer - elapsed
     self.sleepTimer = self.sleepTimer - elapsed
+    self.emoteTimer = self.emoteTimer - elapsed
 
     if self.sneezeTimer <= 0 then
         self.sneezeTimer = RandomSneezeDelay()
@@ -155,6 +188,9 @@ function Pet:Update(elapsed)
     elseif self.sleepTimer <= 0 then
         self.sleepTimer = RandomSleepDelay()
         self:Play("sleepy")
+    elseif self.emoteTimer <= 0 then
+        self.emoteTimer = RandomEmoteDelay()
+        self:PlayPassiveEmote()
     elseif self.blinkTimer <= 0 then
         self.blinkTimer = RandomBlinkDelay()
         self:Play("blink")
