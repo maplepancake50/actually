@@ -314,7 +314,7 @@ function Analyzer:ShowResults()
 
     if Addon.Pet then
         Addon.Pet:Play("happy")
-        Addon.Pet:ShowBubble(result.grade and ("Your build is " .. result.grade .. " tier!") or "No ranked spells yet!", 2.4)
+        Addon.Pet:ShowBubble(result.grade and ("Your Cache Utility is " .. result.grade .. " tier!") or "No ranked spells yet!", 2.4)
     end
 
     if self.petWasTemporarilyShown then

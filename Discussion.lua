@@ -10,6 +10,7 @@ local SetBackdrop = Addon.Util.SetBackdrop
 
 local MESSAGE_PREFIX = Addon.MESSAGE_PREFIX
 local MAX_TEXT_LENGTH = 160
+local COMMUNITY_POST_COOLDOWN = 3
 
 local function PlayerIdentity()
     return UnitName("player") or "Unknown"
@@ -191,6 +192,25 @@ function Discussion:CanDeleteComment(entry)
         return true
     end
     return entry and NormalizeIdentity(entry.author) == NormalizeIdentity(PlayerIdentity())
+end
+
+function Discussion:RefreshPostCooldown()
+    if not self.postButton then
+        return true
+    end
+
+    local now = GetTime and GetTime() or 0
+    local remaining = (tonumber(self.nextCommunityPostAt) or 0) - now
+    if remaining > 0 then
+        self.postButton:Disable()
+        self.postButton:SetText("Wait " .. tostring(math.ceil(remaining)) .. "s")
+        return false
+    end
+
+    self.nextCommunityPostAt = nil
+    self.postButton:Enable()
+    self.postButton:SetText("Post")
+    return true
 end
 
 function Discussion:DeleteComment(spellID, commentID, broadcast, deletedAt)
@@ -409,6 +429,7 @@ function Discussion:Show(spell)
     self.communityInput:SetText("")
     self.frame:Show()
     self:Refresh()
+    self:RefreshPostCooldown()
 end
 
 function Discussion:Create()
@@ -516,12 +537,24 @@ function Discussion:Create()
         if not Discussion.spell then
             return
         end
+        if not Discussion:RefreshPostCooldown() then
+            return
+        end
         local text = CleanText(communityInput:GetText())
         if text == "" then
             return
         end
         Discussion:AddComment(Discussion.spell.spellID, PlayerIdentity(), text, true)
         communityInput:SetText("")
+        Discussion.nextCommunityPostAt = (GetTime and GetTime() or 0) + COMMUNITY_POST_COOLDOWN
+        Discussion:RefreshPostCooldown()
+    end)
+    self.postButton = postButton
+
+    frame:SetScript("OnUpdate", function()
+        if Discussion.nextCommunityPostAt then
+            Discussion:RefreshPostCooldown()
+        end
     end)
 
     priorityInput:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)

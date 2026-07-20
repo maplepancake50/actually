@@ -128,6 +128,23 @@ function Board:SetSection(sectionKey)
     end
 
     self.activeSection = selected.key
+    local showTier = selected.key == "tier"
+    for _, widget in ipairs(self.tierSectionWidgets or {}) do
+        if showTier then widget:Show() else widget:Hide() end
+    end
+    -- Some 3.3.5 UI skins detach InputBox/dropdown artwork from the filter
+    -- bar's inherited visibility. Toggle the controls themselves as well.
+    for _, widget in ipairs(self.filterControls or {}) do
+        if showTier then widget:Show() else widget:Hide() end
+    end
+    if showTier then
+        self:RefreshListControls()
+    end
+    if not showTier then
+        if self.filterSearchBox then self.filterSearchBox:ClearFocus() end
+        if self.spellEditor then self.spellEditor:Hide() end
+        if Addon.BatchCapture and Addon.BatchCapture.frame then Addon.BatchCapture.frame:Hide() end
+    end
     if Addon.Gear then
         Addon.Gear:SetVisible(selected.key == "gear")
     end
@@ -1135,6 +1152,7 @@ function Board:CreateFilterBar()
     bar:SetPoint("TOPLEFT", self.frame, "TOPLEFT", 16, -77)
     bar:SetPoint("TOPRIGHT", self.frame, "TOPRIGHT", -16, -77)
     bar:SetHeight(25)
+    self.filterBar = bar
 
     local searchLabel = bar:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     searchLabel:SetPoint("LEFT", bar, "LEFT", 2, 0)
@@ -1146,6 +1164,7 @@ function Board:CreateFilterBar()
     searchBox:SetPoint("LEFT", searchLabel, "RIGHT", 11, 0)
     searchBox:SetAutoFocus(false)
     searchBox:SetMaxLetters(60)
+    self.filterSearchBox = searchBox
 
     local categoryLabel = bar:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     categoryLabel:SetPoint("LEFT", searchBox, "RIGHT", 18, 0)
@@ -1154,6 +1173,7 @@ function Board:CreateFilterBar()
     local categoryDropdown = CreateFrame("Frame", "ActuallyCategoryFilterDropdown", bar, "UIDropDownMenuTemplate")
     categoryDropdown:SetPoint("LEFT", categoryLabel, "RIGHT", -13, -2)
     UIDropDownMenu_SetWidth(categoryDropdown, 125)
+    self.filterCategoryDropdown = categoryDropdown
     bar.categoryIndex = 1
 
     local coaCheckbox = CreateFrame("CheckButton", "ActuallyCOAFilterCheckButton", bar, "UICheckButtonTemplate")
@@ -1161,6 +1181,7 @@ function Board:CreateFilterBar()
     coaCheckbox:SetHeight(24)
     coaCheckbox:SetPoint("LEFT", categoryDropdown, "RIGHT", -4, 2)
     coaCheckbox:SetChecked(false)
+    self.filterCOACheckbox = coaCheckbox
 
     local coaLabel = coaCheckbox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     coaLabel:SetPoint("LEFT", coaCheckbox, "RIGHT", 1, 1)
@@ -1199,6 +1220,7 @@ function Board:CreateFilterBar()
     self.searchText = ""
     self.filterCategory = "All"
     self.filterCOA = false
+    self.filterControls = { searchBox, categoryDropdown, coaCheckbox }
 end
 
 function Board:CreateResetConfirmations()
@@ -2220,6 +2242,7 @@ function Board:Create()
     footer:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 12, 80)
     footer:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 80)
     footer:SetHeight(34)
+    self.tierFooter = footer
     SetBackdrop(footer, { 0.035, 0.04, 0.055, 0.96 }, { 0.13, 0.32, 0.43, 1 })
 
     local selectList = CreateFrame("Button", nil, footer, "UIPanelButtonTemplate")
@@ -2302,6 +2325,14 @@ function Board:Create()
     self:RefreshListControls()
     self:Layout()
     self:CreateSpellEditor()
+    self.tierSectionWidgets = {
+        headerBadge, title, subtitle, reset, addSpell, batchCapture, auditButton,
+        officialBadge, discussionHint, footer, self.filterBar, self.rankedArea.viewport,
+        self.rankedArea.bar, self.rows.U,
+    }
+    if Addon.Analyzer and Addon.Analyzer.launchButton then
+        table.insert(self.tierSectionWidgets, Addon.Analyzer.launchButton)
+    end
     self:CreateSectionNavigation(close)
     if Addon.Gear then
         Addon.Gear:Create(frame)

@@ -8,27 +8,27 @@ local SetBackdrop = Addon.Util.SetBackdrop
 local MAX_VISIBLE_SETS = 10
 
 local SLOT_LAYOUT = {
-    { key = "head", label = "Head", inventory = "HeadSlot", x = 30, y = -105, side = "left" },
-    { key = "neck", label = "Neck", inventory = "NeckSlot", x = 30, y = -160, side = "left" },
-    { key = "shoulder", label = "Shoulders", inventory = "ShoulderSlot", x = 30, y = -215, side = "left" },
-    { key = "back", label = "Back", inventory = "BackSlot", x = 30, y = -270, side = "left" },
-    { key = "chest", label = "Chest", inventory = "ChestSlot", x = 30, y = -325, side = "left" },
-    { key = "shirt", label = "Shirt", inventory = "ShirtSlot", x = 30, y = -380, side = "left" },
-    { key = "tabard", label = "Tabard", inventory = "TabardSlot", x = 30, y = -435, side = "left" },
-    { key = "wrist", label = "Wrist", inventory = "WristSlot", x = 30, y = -490, side = "left" },
+    { key = "head", label = "Head", inventory = "HeadSlot", x = 30, y = -55, side = "left" },
+    { key = "neck", label = "Neck", inventory = "NeckSlot", x = 30, y = -105, side = "left" },
+    { key = "shoulder", label = "Shoulders", inventory = "ShoulderSlot", x = 30, y = -155, side = "left" },
+    { key = "back", label = "Back", inventory = "BackSlot", x = 30, y = -205, side = "left" },
+    { key = "chest", label = "Chest", inventory = "ChestSlot", x = 30, y = -255, side = "left" },
+    { key = "shirt", label = "Shirt", inventory = "ShirtSlot", x = 30, y = -305, side = "left" },
+    { key = "tabard", label = "Tabard", inventory = "TabardSlot", x = 30, y = -355, side = "left" },
+    { key = "wrist", label = "Wrist", inventory = "WristSlot", x = 30, y = -405, side = "left" },
 
-    { key = "hands", label = "Hands", inventory = "HandsSlot", x = 334, y = -105, side = "right" },
-    { key = "waist", label = "Waist", inventory = "WaistSlot", x = 334, y = -160, side = "right" },
-    { key = "legs", label = "Legs", inventory = "LegsSlot", x = 334, y = -215, side = "right" },
-    { key = "feet", label = "Feet", inventory = "FeetSlot", x = 334, y = -270, side = "right" },
-    { key = "finger1", label = "Ring 1", inventory = "Finger0Slot", x = 334, y = -325, side = "right" },
-    { key = "finger2", label = "Ring 2", inventory = "Finger1Slot", x = 334, y = -380, side = "right" },
-    { key = "trinket1", label = "Trinket 1", inventory = "Trinket0Slot", x = 334, y = -435, side = "right" },
-    { key = "trinket2", label = "Trinket 2", inventory = "Trinket1Slot", x = 334, y = -490, side = "right" },
+    { key = "hands", label = "Hands", inventory = "HandsSlot", x = 334, y = -55, side = "right" },
+    { key = "waist", label = "Waist", inventory = "WaistSlot", x = 334, y = -105, side = "right" },
+    { key = "legs", label = "Legs", inventory = "LegsSlot", x = 334, y = -155, side = "right" },
+    { key = "feet", label = "Feet", inventory = "FeetSlot", x = 334, y = -205, side = "right" },
+    { key = "finger1", label = "Ring 1", inventory = "Finger0Slot", x = 334, y = -255, side = "right" },
+    { key = "finger2", label = "Ring 2", inventory = "Finger1Slot", x = 334, y = -305, side = "right" },
+    { key = "trinket1", label = "Trinket 1", inventory = "Trinket0Slot", x = 334, y = -355, side = "right" },
+    { key = "trinket2", label = "Trinket 2", inventory = "Trinket1Slot", x = 334, y = -405, side = "right" },
 
-    { key = "mainhand", label = "Main Hand", inventory = "MainHandSlot", x = 107, y = -565, side = "bottom" },
-    { key = "offhand", label = "Off Hand", inventory = "SecondaryHandSlot", x = 176, y = -565, side = "bottom" },
-    { key = "ranged", label = "Ranged / Relic", inventory = "RangedSlot", x = 245, y = -565, side = "bottom" },
+    { key = "mainhand", label = "Main Hand", inventory = "MainHandSlot", x = 107, side = "bottom" },
+    { key = "offhand", label = "Off Hand", inventory = "SecondaryHandSlot", x = 176, side = "bottom" },
+    { key = "ranged", label = "Ranged / Relic", inventory = "RangedSlot", x = 245, side = "bottom" },
 }
 
 local function Now()
@@ -119,6 +119,11 @@ function Gear:SelectSet(id)
             self:Touch(previous, "Updated gear set " .. previous.name .. ".")
         end
     end
+    -- Clicking another frame does not reliably remove EditBox focus in 3.3.5.
+    -- Clear it before refreshing so the newly selected set's fields are loaded
+    -- instead of retaining the previous set's draft text.
+    if self.nameEdit then self.nameEdit:ClearFocus() end
+    if self.notesEdit then self.notesEdit:ClearFocus() end
     self.selectedSetID = id
     self.selectedSlot = nil
     self.deleteArmedUntil = nil
@@ -268,13 +273,31 @@ function Gear:InstallLinkCapture()
     self.linkCaptureInstalled = true
     self.originalInsertLink = ChatEdit_InsertLink
     ChatEdit_InsertLink = function(link)
-        if Gear.frame and Gear.frame:IsShown() and ParseItemLink(link) then
+        -- IsShown() on a child can remain true while its parent is hidden.  Require
+        -- the main addon window and Gear section as well, so normal chat linking
+        -- resumes immediately when Actually is closed or another tab is selected.
+        local board = Addon.Board
+        local captureActive = Gear.frame
+            and Gear.frame:IsShown()
+            and board
+            and board.frame
+            and board.frame:IsShown()
+            and board.activeSection == "gear"
+        if captureActive and ParseItemLink(link) then
             if Gear:CaptureItemLink(link) then
                 return true
             end
         end
         return Gear.originalInsertLink(link)
     end
+end
+
+function Gear:DeactivateLinkCapture()
+    if not self.selectedSlot then
+        return
+    end
+    self.selectedSlot = nil
+    self:RefreshSlots()
 end
 
 function Gear:SelectSlot(slotKey)
@@ -425,6 +448,7 @@ function Gear:SetVisible(visible)
         self.frame:Show()
         self:Refresh()
     else
+        self:DeactivateLinkCapture()
         self.frame:Hide()
         if self.nameEdit then self.nameEdit:ClearFocus() end
         if self.notesEdit then self.notesEdit:ClearFocus() end
@@ -434,9 +458,13 @@ end
 
 function Gear:CreateSlot(parent, slotInfo)
     local button = CreateFrame("Button", nil, parent)
-    button:SetWidth(48)
-    button:SetHeight(48)
-    button:SetPoint("TOPLEFT", parent, "TOPLEFT", slotInfo.x, slotInfo.y)
+    button:SetWidth(42)
+    button:SetHeight(42)
+    if slotInfo.side == "bottom" then
+        button:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", slotInfo.x, 20)
+    else
+        button:SetPoint("TOPLEFT", parent, "TOPLEFT", slotInfo.x, slotInfo.y)
+    end
     button:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     SetBackdrop(button, { 0.035, 0.045, 0.06, 0.98 }, { 0.18, 0.28, 0.38, 1 })
 
@@ -520,8 +548,8 @@ function Gear:Create(parent)
 
     local leftPane = CreateFrame("Frame", nil, frame)
     leftPane:SetPoint("TOPLEFT", frame, "TOPLEFT", 14, -68)
+    leftPane:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 14, 52)
     leftPane:SetWidth(176)
-    leftPane:SetHeight(545)
     leftPane:EnableMouse(true)
     leftPane:EnableMouseWheel(true)
     SetBackdrop(leftPane, { 0.03, 0.04, 0.055, 0.98 }, { 0.13, 0.32, 0.43, 1 })
@@ -569,20 +597,20 @@ function Gear:Create(parent)
 
     local paperDoll = CreateFrame("Frame", nil, frame)
     paperDoll:SetPoint("TOPLEFT", frame, "TOPLEFT", 198, -68)
+    paperDoll:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 198, 52)
     paperDoll:SetWidth(414)
-    paperDoll:SetHeight(545)
     SetBackdrop(paperDoll, { 0.028, 0.035, 0.048, 0.98 }, { 0.15, 0.34, 0.48, 1 })
     self.paperDoll = paperDoll
 
     local dollTitle = paperDoll:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    dollTitle:SetPoint("TOP", paperDoll, "TOP", 0, -48)
+    dollTitle:SetPoint("TOP", paperDoll, "TOP", 0, -17)
     dollTitle:SetText("EQUIPMENT")
     dollTitle:SetTextColor(0.45, 0.72, 0.92)
 
     local silhouette = paperDoll:CreateTexture(nil, "BACKGROUND")
     silhouette:SetWidth(166)
-    silhouette:SetHeight(350)
-    silhouette:SetPoint("TOP", paperDoll, "TOP", 0, -95)
+    silhouette:SetHeight(330)
+    silhouette:SetPoint("TOP", paperDoll, "TOP", 0, -52)
     silhouette:SetTexture("Interface\\Buttons\\WHITE8X8")
     silhouette:SetVertexColor(0.055, 0.075, 0.105, 0.72)
 
@@ -678,6 +706,11 @@ function Gear:Create(parent)
             and "Select a slot, then Shift-click an item link to add it."
             or "Official gear builds are read-only.")
         Gear:Refresh()
+    end)
+    frame:SetScript("OnHide", function()
+        Gear:DeactivateLinkCapture()
+        if Gear.nameEdit then Gear.nameEdit:ClearFocus() end
+        if Gear.notesEdit then Gear.notesEdit:ClearFocus() end
     end)
 
     self:InstallLinkCapture()
