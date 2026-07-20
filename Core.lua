@@ -318,9 +318,9 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
         elseif lowerMessage == "pet emote" then
             Addon.Pet:Show()
             Addon.Pet:PlayPassiveEmote()
-        elseif lowerMessage == "pet crows" then
+        elseif lowerMessage == "pet sad" then
             Addon.Pet:Show()
-            Addon.Pet:Play("crows")
+            Addon.Pet:Play("sad")
         elseif lowerMessage == "sync" and Addon.Sync then
             Addon.Sync:PrintStatus(false)
         elseif lowerMessage == "sync now" and Addon.Sync then

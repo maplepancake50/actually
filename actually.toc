@@ -9,6 +9,8 @@ Core.lua
 Official.lua
 Discussion.lua
 TierBoard.lua
+BatchCapture.lua
 Sync.lua
 MinimapButton.lua
 Pet.lua
+BuildAnalyzer.lua

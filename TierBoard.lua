@@ -42,6 +42,10 @@ for _, category in ipairs(SPELL_CATEGORIES) do
     table.insert(FILTER_CATEGORIES, category)
 end
 
+function Board:GetSpellCategories()
+    return SPELL_CATEGORIES
+end
+
 local function NormalizeCategory(category)
     if category == "Control" or category == "Stun" then
         return "CC"
@@ -314,6 +318,41 @@ function Board:AddCustomSpell(spellID, category, coa)
     self:Layout()
     Addon:Print(spell.name .. " added to the Pool.")
     return true
+end
+
+function Board:AddCustomSpells(entries)
+    if not Addon:CanEditActiveList() then
+        Addon:Print(Addon.OFFICIAL_LIST_NAME .. " is read-only.")
+        return 0, #(entries or {})
+    end
+
+    local changedKeys = {}
+    local added = 0
+    local unavailable = 0
+    for _, entry in ipairs(entries or {}) do
+        local spell = self:UpsertCustomSpell(entry.spellID, entry.category, entry.coa)
+        if spell then
+            if not self:FindSpellLocation(spell.key) then
+                table.insert(self.state.U, spell.key)
+            end
+            table.insert(changedKeys, spell.key)
+            added = added + 1
+        else
+            unavailable = unavailable + 1
+        end
+    end
+
+    if added == 0 then
+        return 0, unavailable
+    end
+    self:SortPool()
+    self:SaveState("Added or updated " .. tostring(added) .. " spells from Batch Capture.", changedKeys)
+    if Addon.Sync and not Addon:IsOfficialList() then
+        Addon.Sync:MarkDirty(true)
+    end
+    self:Layout()
+    Addon:Print("Batch Capture added " .. tostring(added) .. " spell(s) to the Pool.")
+    return added, unavailable
 end
 
 function Board:SetCustomSpellCategory(spell, category)
@@ -1255,9 +1294,11 @@ function Board:RefreshListControls()
         if isOfficer then
             self.resetButton:Enable()
             self.addSpellButton:Enable()
+            self.batchCaptureButton:Enable()
         else
             self.resetButton:Disable()
             self.addSpellButton:Disable()
+            self.batchCaptureButton:Disable()
         end
         if self.officialBadge then
             self.officialBadge:SetBackdropColor(0.24, 0.16, 0.025, 1)
@@ -1267,6 +1308,7 @@ function Board:RefreshListControls()
         self.listSubtitle:SetText(Addon.db.activeList.name .. "  |cff77cc77(personal)|r")
         self.resetButton:Enable()
         self.addSpellButton:Enable()
+        self.batchCaptureButton:Enable()
         if self.officialBadge then
             self.officialBadge:SetBackdropColor(0.16, 0.105, 0.025, 0.98)
             self.officialBadge:SetBackdropBorderColor(1, 0.76, 0.18, 1)
@@ -1795,6 +1837,10 @@ function Board:Create()
     SetBackdrop(frame, { 0.025, 0.025, 0.035, 0.98 }, { 0.20, 0.55, 0.75, 1 })
     self.frame = frame
 
+    if Addon.Analyzer then
+        Addon.Analyzer:Create(frame)
+    end
+
     local headerBadge = CreateFrame("Frame", nil, frame)
     headerBadge:SetWidth(64)
     headerBadge:SetHeight(64)
@@ -1838,6 +1884,17 @@ function Board:Create()
         Board:ShowSpellEditor()
     end)
     self.addSpellButton = addSpell
+
+    local batchCapture = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    batchCapture:SetWidth(105)
+    batchCapture:SetHeight(22)
+    batchCapture:SetText("Batch Capture")
+    batchCapture:SetScript("OnClick", function()
+        if Addon.BatchCapture then
+            Addon.BatchCapture:Show()
+        end
+    end)
+    self.batchCaptureButton = batchCapture
 
     local auditButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
     auditButton:SetWidth(95)
@@ -1957,8 +2014,10 @@ function Board:Create()
 
     reset:SetParent(footer)
     addSpell:SetParent(footer)
+    batchCapture:SetParent(footer)
     reset:SetPoint("LEFT", footer, "LEFT", 100, 0)
     addSpell:SetPoint("LEFT", reset, "RIGHT", 6, 0)
+    batchCapture:SetPoint("LEFT", addSpell, "RIGHT", 6, 0)
 
     petCheckbox:SetScript("OnClick", function(self)
         if self:GetChecked() then

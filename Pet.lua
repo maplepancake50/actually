@@ -8,7 +8,8 @@ local PET_SIZE = 128
 local SHEET_COLUMNS = 4
 local SHEET_ROWS = 4
 local MAIN_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPet"
-local EXTRAS_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetExtras"
+local SAD_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetSad"
+local ANALYSIS_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetAnalysis"
 
 local ANIMATIONS = {
     blink = {
@@ -39,19 +40,25 @@ local ANIMATIONS = {
         frames = { 1, 13, 14, 13, 1 },
         durations = { 0.12, 0.16, 0.22, 0.16, 0.12 },
     },
-    crows = {
-        sheet = "extras",
-        frames = { 9, 10, 11, 12, 13, 14, 15, 16 },
-        durations = { 0.16, 0.16, 0.16, 0.16, 0.16, 0.16, 0.16, 0.20 },
+    sad = {
+        sheet = "sad",
+        frames = { 1, 4, 12, 15, 16, 15, 1 },
+        durations = { 0.22, 0.24, 0.28, 0.36, 0.48, 0.25, 0.14 },
+    },
+    research = {
+        sheet = "analysis",
+        frames = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 },
+        durations = { 0.24, 0.24, 0.24, 0.26, 0.22, 0.22, 0.22, 0.24, 0.22, 0.24, 0.28, 0.28, 0.22, 0.22, 0.24, 0.26 },
+        loop = true,
     },
 }
 
 local CHATTER = {
-    "actually!",
-    "hi hi!",
+    "well, actually...",
+    "technically...",
     "need a tier list?",
     "*adjusts glasses*",
-    "I am helping!",
+    "minor correction.",
     "RAT MODELZ",
     "@pika",
     "going cache?",
@@ -103,7 +110,13 @@ function Pet:SetSheet(sheet)
     end
 
     self.currentSheet = sheet
-    self.texture:SetTexture(sheet == "extras" and EXTRAS_SHEET or MAIN_SHEET)
+    if sheet == "sad" then
+        self.texture:SetTexture(SAD_SHEET)
+    elseif sheet == "analysis" then
+        self.texture:SetTexture(ANALYSIS_SHEET)
+    else
+        self.texture:SetTexture(MAIN_SHEET)
+    end
 end
 
 function Pet:ResetTimers()
@@ -116,14 +129,14 @@ end
 function Pet:PlayPassiveEmote()
     self.blinkTimer = RandomBlinkDelay()
     local roll = math.random(1, 100)
-    if roll <= 44 then
+    if roll <= 42 then
         self:Play("perky")
-    elseif roll <= 70 then
+    elseif roll <= 68 then
         self:Play("curious")
-    elseif roll <= 90 then
+    elseif roll <= 92 then
         self:Play("doubleBlink")
     else
-        self:Play("crows")
+        self:Play("sad")
     end
 end
 
@@ -160,6 +173,13 @@ function Pet:ShowBubble(message, duration)
     self.bubble:SetAlpha(1)
     self.bubble:Show()
     self.bubbleRemaining = duration or 1.8
+end
+
+function Pet:HideBubble()
+    self.bubbleRemaining = nil
+    if self.bubble then
+        self.bubble:Hide()
+    end
 end
 
 function Pet:UpdateAnimation(elapsed)
@@ -271,6 +291,13 @@ function Pet:Hide()
     end
     Addon.db.pet.shown = false
     self.frame:Hide()
+    if Addon.Analyzer then
+        if Addon.Analyzer.running and Addon.Analyzer.Cancel then
+            Addon.Analyzer:Cancel()
+        elseif Addon.Analyzer.frame and Addon.Analyzer.frame:IsShown() then
+            Addon.Analyzer.frame:Hide()
+        end
+    end
     if Addon.Board and Addon.Board.petCheckbox then
         Addon.Board.petCheckbox:SetChecked(false)
     end
@@ -350,7 +377,7 @@ function Pet:Create()
     button:SetScript("OnDragStart", function(self)
         Pet.wasDragged = true
         self:StartMoving()
-        Pet:Play("happy")
+        Pet:PlayPassiveEmote()
         Pet:ShowBubble(DRAG_CHATTER[math.random(1, #DRAG_CHATTER)], 1.4)
         GameTooltip:Hide()
     end)
@@ -358,7 +385,7 @@ function Pet:Create()
     button:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
         Pet:SavePosition()
-        Pet:Play("happy")
+        Pet:Play("curious")
     end)
 
     button:SetScript("OnClick", function(_, mouseButton)
