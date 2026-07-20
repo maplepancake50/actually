@@ -39,12 +39,6 @@ local ANIMATIONS = {
         frames = { 1, 13, 14, 13, 1 },
         durations = { 0.12, 0.16, 0.22, 0.16, 0.12 },
     },
-    drag = {
-        sheet = "extras",
-        frames = { 1, 2, 3, 4, 5, 6, 7, 8 },
-        durations = { 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10, 0.10 },
-        loop = true,
-    },
     crows = {
         sheet = "extras",
         frames = { 9, 10, 11, 12, 13, 14, 15, 16 },
@@ -267,6 +261,9 @@ function Pet:Show()
     end
     Addon.db.pet.shown = true
     self.frame:Show()
+    if Addon.Board and Addon.Board.petCheckbox then
+        Addon.Board.petCheckbox:SetChecked(true)
+    end
 end
 
 function Pet:Hide()
@@ -275,6 +272,9 @@ function Pet:Hide()
     end
     Addon.db.pet.shown = false
     self.frame:Hide()
+    if Addon.Board and Addon.Board.petCheckbox then
+        Addon.Board.petCheckbox:SetChecked(false)
+    end
 end
 
 function Pet:Toggle()
@@ -351,7 +351,7 @@ function Pet:Create()
     button:SetScript("OnDragStart", function(self)
         Pet.wasDragged = true
         self:StartMoving()
-        Pet:Play("drag")
+        Pet:Play("happy")
         Pet:ShowBubble(DRAG_CHATTER[math.random(1, #DRAG_CHATTER)], 1.4)
         GameTooltip:Hide()
     end)

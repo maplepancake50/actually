@@ -6,6 +6,7 @@
 ## SavedVariables: ActuallyDB
 
 Core.lua
+Official.lua
 TierBoard.lua
 MinimapButton.lua
 Pet.lua
