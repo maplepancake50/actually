@@ -6,8 +6,7 @@ local Addon = Actually
 local UI = {}
 Addon.AssistLogUI = UI
 
-local WIDTH = 900
-local HEIGHT = 620
+local WIDTH = 970
 local ROW_HEIGHT = 24
 local LOGO = "Interface\\AddOns\\actually\\Textures\\AssistLogLogo"
 
@@ -142,20 +141,26 @@ end
 function UI:Create()
     if self.frame then return self.frame end
 
-    local frame = CreateFrame("Frame", "ActuallyAssistLogFrame", UIParent)
-    frame:SetWidth(WIDTH)
-    frame:SetHeight(HEIGHT)
-    frame:SetPoint("CENTER", UIParent, "CENTER", 0, 20)
-    frame:SetFrameStrata("DIALOG")
+    local parent = Addon.Board and Addon.Board.frame
+    if not parent then return nil end
+
+    local frame = CreateFrame("Frame", "ActuallyAssistLogFrame", parent)
+    frame:SetPoint("TOPLEFT", parent, "TOPLEFT", 5, -5)
+    frame:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -5, 156)
+    frame:SetFrameLevel(parent:GetFrameLevel() + 21)
     Addon.Util.SetBackdrop(frame, COLORS.panel, COLORS.border)
-    frame:SetMovable(true)
     frame:EnableMouse(true)
     frame:RegisterForDrag("LeftButton")
-    frame:SetScript("OnDragStart", function(self) self:StartMoving() end)
-    frame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
-
-    local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
-    close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -5, -5)
+    frame:SetScript("OnDragStart", function()
+        if Addon.Board and Addon.Board.frame and not Addon.Board.dragging then
+            Addon.Board.frame:StartMoving()
+        end
+    end)
+    frame:SetScript("OnDragStop", function()
+        if Addon.Board and Addon.Board.frame then
+            Addon.Board.frame:StopMovingOrSizing()
+        end
+    end)
 
     local logoBadge = CreateFrame("Frame", nil, frame)
     logoBadge:SetWidth(58); logoBadge:SetHeight(58)
@@ -288,10 +293,41 @@ function UI:Create()
         UI.elapsed = (UI.elapsed or 0) + elapsed
         if UI.elapsed >= 0.5 then UI.elapsed = 0; UI:RefreshStatus() end
     end)
+    frame:SetScript("OnShow", function()
+        if Addon.Board then Addon.Board:RefreshAssistTrackerTab() end
+    end)
+    frame:SetScript("OnHide", function()
+        if Addon.Board then Addon.Board:RefreshAssistTrackerTab() end
+    end)
 
     self.frame = frame
     self.view = "fight"
+    frame:Hide()
     return frame
+end
+
+function UI:ResizeToParent(bottom)
+    if not self.frame or not Addon.Board or not Addon.Board.frame then return end
+    self.frame:ClearAllPoints()
+    self.frame:SetPoint("TOPLEFT", Addon.Board.frame, "TOPLEFT", 5, -5)
+    self.frame:SetPoint("BOTTOMRIGHT", Addon.Board.frame, "BOTTOMRIGHT", -5, tonumber(bottom) or 156)
+end
+
+function UI:SetVisible(visible)
+    if not visible then
+        if self.frame then self.frame:Hide() end
+        return
+    end
+    if not Addon.RaidTargets:CanControl() then return end
+    self:Create()
+    if not self.frame then return end
+    if Addon.RaidTargets:IsRunning() then self.view = "active"
+    elseif Addon.RaidTargets:GetLastFight() then
+        self.view = self.view or "fight"
+        self.selectedFightID = self.selectedFightID or Addon.RaidTargets:GetLastFight().id
+    else self.view = "empty" end
+    self:Refresh()
+    self.frame:Show()
 end
 
 function UI:AcquireRow(index)
@@ -584,11 +620,8 @@ function UI:Show()
     if not Addon.RaidTargets:CanControl() then
         return
     end
-    self:Create()
-    if Addon.RaidTargets:IsRunning() then self.view = "active"
-    elseif Addon.RaidTargets:GetLastFight() then
-        self.view = self.view or "fight"
-        self.selectedFightID = self.selectedFightID or Addon.RaidTargets:GetLastFight().id
-    else self.view = "empty" end
-    self:Refresh(); self.frame:Show()
+    if Addon.Board and Addon.Board.frame then
+        Addon.Board.frame:Show()
+        Addon.Board:SetSection("assist")
+    end
 end

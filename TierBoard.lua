@@ -36,6 +36,11 @@ local NAV_TAB_GAP = 8
 local NAV_TAB_WIDTH = (NAV_RAIL_WIDTH - NAV_RAIL_PADDING * 2 - NAV_TAB_GAP * 3) / 4
 local NAV_TAB_HEIGHT = 56
 local NAV_TAB_Y = 6
+local NAV_SECOND_ROW_HEIGHT = NAV_TAB_HEIGHT + 12
+local NAV_EXPANDED_HEIGHT = NAV_SECOND_ROW_HEIGHT + 8
+local BOARD_BASE_HEIGHT = 750
+local NAV_RAIL_BASE_HEIGHT = 68
+local TIER_FOOTER_BASE_Y = 80
 local NAV_SECTIONS = {
     {
         key = "tier",
@@ -103,7 +108,7 @@ function Board:RefreshSectionTabs()
         tab:ClearAllPoints()
         tab:SetWidth(NAV_TAB_WIDTH)
         tab:SetHeight(NAV_TAB_HEIGHT)
-        tab:SetPoint("BOTTOMLEFT", self.sectionRail, "BOTTOMLEFT", tab.offsetX, NAV_TAB_Y)
+        tab:SetPoint("BOTTOMLEFT", self.sectionRail, "BOTTOMLEFT", tab.offsetX, self.primaryNavY or NAV_TAB_Y)
         tab:SetBackdropColor(red, green, blue, 0.98)
         tab:SetBackdropBorderColor(
             section.border[1],
@@ -121,8 +126,61 @@ function Board:RefreshSectionTabs()
     end
 end
 
+function Board:RefreshSectionNavigationPermissions()
+    if not self.frame or not self.sectionRail or not self.assistTrackerTab then
+        return
+    end
+
+    local isOfficer = Addon.Official and Addon.Official:IsOfficer()
+    if not isOfficer and self.activeSection == "assist" then
+        self:SetSection("tier")
+        return
+    end
+    self.primaryNavY = isOfficer and (NAV_TAB_Y + NAV_SECOND_ROW_HEIGHT) or NAV_TAB_Y
+    self.frame:SetHeight(BOARD_BASE_HEIGHT + (isOfficer and NAV_EXPANDED_HEIGHT or 0))
+    self.sectionRail:SetHeight(NAV_RAIL_BASE_HEIGHT + (isOfficer and NAV_SECOND_ROW_HEIGHT or 0))
+
+    if self.tierFooter then
+        self.tierFooter:ClearAllPoints()
+        self.tierFooter:SetPoint("BOTTOMLEFT", self.frame, "BOTTOMLEFT", 12,
+            TIER_FOOTER_BASE_Y + (isOfficer and NAV_EXPANDED_HEIGHT or 0))
+        self.tierFooter:SetPoint("BOTTOMRIGHT", self.frame, "BOTTOMRIGHT", -12,
+            TIER_FOOTER_BASE_Y + (isOfficer and NAV_EXPANDED_HEIGHT or 0))
+    end
+
+    local contentBottom = TIER_FOOTER_BASE_Y + (isOfficer and NAV_EXPANDED_HEIGHT or 0)
+    if Addon.Gear and Addon.Gear.frame then
+        Addon.Gear.frame:ClearAllPoints()
+        Addon.Gear.frame:SetPoint("TOPLEFT", self.frame, "TOPLEFT", 5, -5)
+        Addon.Gear.frame:SetPoint("BOTTOMRIGHT", self.frame, "BOTTOMRIGHT", -5, contentBottom)
+    end
+    if Addon.AssistLogUI and Addon.AssistLogUI.frame then
+        Addon.AssistLogUI:ResizeToParent(contentBottom)
+    end
+
+    if isOfficer then
+        self.assistTrackerTab:Show()
+    else
+        self.assistTrackerTab:Hide()
+    end
+    self:RefreshSectionTabs()
+    self:RefreshAssistTrackerTab()
+end
+
+function Board:RefreshAssistTrackerTab()
+    local tab = self.assistTrackerTab
+    if not tab then return end
+    local active = self.activeSection == "assist"
+    tab:SetBackdropColor(active and 0.13 or 0.08, active and 0.40 or 0.30, active and 0.50 or 0.38, 0.98)
+    tab:SetBackdropBorderColor(0.24, 0.86, 1.00, active and 1 or 0.72)
+    if tab.activeGlow then tab.activeGlow:SetAlpha(active and 0.95 or 0) end
+end
+
 function Board:SetSection(sectionKey)
     local selected
+    if sectionKey == "assist" and Addon.Official and Addon.Official:IsOfficer() then
+        selected = { key = "assist", title = "Assist Tracker" }
+    end
     for _, section in ipairs(NAV_SECTIONS) do
         if section.key == sectionKey then
             selected = section
@@ -169,9 +227,12 @@ function Board:SetSection(sectionKey)
     if Addon.Gear then
         Addon.Gear:SetVisible(selected.key == "gear")
     end
+    if Addon.AssistLogUI then
+        Addon.AssistLogUI:SetVisible(selected.key == "assist")
+    end
     if selected.key == "tier" then
         self.sectionPanel:Hide()
-    elseif selected.key == "gear" then
+    elseif selected.key == "gear" or selected.key == "assist" then
         self.sectionPanel:Hide()
     else
         self.sectionPanel.icon:SetTexture(selected.icon)
@@ -183,6 +244,7 @@ function Board:SetSection(sectionKey)
         self.sectionPanel:Show()
     end
     self:RefreshSectionTabs()
+    self:RefreshAssistTrackerTab()
 end
 
 function Board:CreateSectionNavigation(closeButton)
@@ -222,7 +284,7 @@ function Board:CreateSectionNavigation(closeButton)
 
     local rail = CreateFrame("Frame", nil, frame)
     rail:SetWidth(NAV_RAIL_WIDTH)
-    rail:SetHeight(68)
+    rail:SetHeight(NAV_RAIL_BASE_HEIGHT)
     rail:SetPoint("BOTTOM", frame, "BOTTOM", 0, 8)
     rail:SetFrameLevel(frame:GetFrameLevel() + 24)
     rail:EnableMouse(true)
@@ -323,10 +385,84 @@ function Board:CreateSectionNavigation(closeButton)
         self.sectionTabs[sectionInfo.key] = tab
     end
 
+    local assistTab = CreateFrame("Button", nil, rail)
+    assistTab:SetWidth(NAV_TAB_WIDTH)
+    assistTab:SetHeight(NAV_TAB_HEIGHT)
+    assistTab:SetPoint("BOTTOMLEFT", rail, "BOTTOMLEFT", NAV_RAIL_PADDING, NAV_TAB_Y)
+    assistTab:SetFrameLevel(frame:GetFrameLevel() + 30)
+    SetBackdrop(assistTab, { 0.08, 0.30, 0.38, 0.98 }, { 0.24, 0.86, 1.00, 1 })
+
+    local assistSpine = assistTab:CreateTexture(nil, "BACKGROUND")
+    assistSpine:SetPoint("BOTTOMLEFT", assistTab, "BOTTOMLEFT", 5, 4)
+    assistSpine:SetPoint("BOTTOMRIGHT", assistTab, "BOTTOMRIGHT", -5, 4)
+    assistSpine:SetHeight(5)
+    assistSpine:SetTexture("Interface\\Buttons\\WHITE8X8")
+    assistSpine:SetVertexColor(0.03, 0.18, 0.25, 1)
+
+    local assistGlowTop = assistTab:CreateTexture(nil, "OVERLAY")
+    assistGlowTop:SetPoint("BOTTOMLEFT", assistTab, "TOPLEFT", -3, -1)
+    assistGlowTop:SetPoint("BOTTOMRIGHT", assistTab, "TOPRIGHT", 3, -1)
+    assistGlowTop:SetHeight(4)
+    local assistGlowBottom = assistTab:CreateTexture(nil, "OVERLAY")
+    assistGlowBottom:SetPoint("TOPLEFT", assistTab, "BOTTOMLEFT", -3, 1)
+    assistGlowBottom:SetPoint("TOPRIGHT", assistTab, "BOTTOMRIGHT", 3, 1)
+    assistGlowBottom:SetHeight(4)
+    local assistGlowLeft = assistTab:CreateTexture(nil, "OVERLAY")
+    assistGlowLeft:SetPoint("TOPRIGHT", assistTab, "TOPLEFT", 1, 3)
+    assistGlowLeft:SetPoint("BOTTOMRIGHT", assistTab, "BOTTOMLEFT", 1, -3)
+    assistGlowLeft:SetWidth(4)
+    local assistGlowRight = assistTab:CreateTexture(nil, "OVERLAY")
+    assistGlowRight:SetPoint("TOPLEFT", assistTab, "TOPRIGHT", -1, 3)
+    assistGlowRight:SetPoint("BOTTOMLEFT", assistTab, "BOTTOMRIGHT", -1, -3)
+    assistGlowRight:SetWidth(4)
+    local assistGlows = { assistGlowTop, assistGlowBottom, assistGlowLeft, assistGlowRight }
+    for _, glow in ipairs(assistGlows) do
+        glow:SetTexture("Interface\\Buttons\\WHITE8X8")
+        glow:SetBlendMode("ADD")
+        glow:SetVertexColor(0.24, 0.86, 1.00, 1)
+        glow:SetAlpha(0)
+    end
+    assistTab.activeGlow = {
+        SetAlpha = function(_, alpha)
+            for _, glow in ipairs(assistGlows) do glow:SetAlpha(alpha) end
+        end,
+    }
+
+    local assistIcon = assistTab:CreateTexture(nil, "ARTWORK")
+    assistIcon:SetWidth(44)
+    assistIcon:SetHeight(44)
+    assistIcon:SetPoint("LEFT", assistTab, "LEFT", 17, 1)
+    assistIcon:SetTexture("Interface\\AddOns\\actually\\Textures\\TabIconAssist")
+
+    local assistLabel = assistTab:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    assistLabel:SetPoint("LEFT", assistIcon, "RIGHT", 11, 0)
+    assistLabel:SetWidth(145)
+    assistLabel:SetJustifyH("LEFT")
+    assistLabel:SetText("ASSIST TRACKER")
+    assistLabel:SetTextColor(0.80, 0.96, 1.00, 1)
+
+    assistTab:SetScript("OnClick", function()
+        if Addon.Official and Addon.Official:IsOfficer() and Addon.AssistLogUI then
+            Board:SetSection("assist")
+        end
+    end)
+    assistTab:SetScript("OnEnter", function(self)
+        self:SetBackdropBorderColor(1, 1, 1, 1)
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText("Assist Tracker", 0.24, 0.86, 1.00)
+        GameTooltip:AddLine("Open raid target-following controls and fight history.", 1, 1, 1, true)
+        GameTooltip:Show()
+    end)
+    assistTab:SetScript("OnLeave", function(self)
+        GameTooltip:Hide()
+        Board:RefreshAssistTrackerTab()
+    end)
+    self.assistTrackerTab = assistTab
+
     closeButton:SetFrameLevel(frame:GetFrameLevel() + 32)
     self.activeSection = "tier"
     panel:Hide()
-    self:RefreshSectionTabs()
+    self:RefreshSectionNavigationPermissions()
 end
 
 local function NormalizeCategory(category)
@@ -1619,6 +1755,7 @@ function Board:RefreshListControls()
     if Addon.Gear and Addon.Gear.frame then
         Addon.Gear:RefreshPermissions()
     end
+    self:RefreshSectionNavigationPermissions()
 end
 
 function Board:RefreshAuditLog()
@@ -2108,7 +2245,7 @@ function Board:Create()
 
     local frame = CreateFrame("Frame", "ActuallyTierBoardFrame", UIParent)
     frame:SetWidth(980)
-    frame:SetHeight(750)
+    frame:SetHeight(BOARD_BASE_HEIGHT)
     frame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     frame:SetFrameStrata("DIALOG")
     frame:SetMovable(true)
@@ -2274,8 +2411,8 @@ function Board:Create()
     headerDivider:SetVertexColor(0.20, 0.55, 0.75, 0.34)
 
     local footer = CreateFrame("Frame", nil, frame)
-    footer:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 12, 80)
-    footer:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 80)
+    footer:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 12, TIER_FOOTER_BASE_Y)
+    footer:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, TIER_FOOTER_BASE_Y)
     footer:SetHeight(34)
     self.tierFooter = footer
     SetBackdrop(footer, { 0.035, 0.04, 0.055, 0.96 }, { 0.13, 0.32, 0.43, 1 })
@@ -2372,5 +2509,6 @@ function Board:Create()
     if Addon.Gear then
         Addon.Gear:Create(frame)
     end
+    self:RefreshSectionNavigationPermissions()
     frame:Hide()
 end

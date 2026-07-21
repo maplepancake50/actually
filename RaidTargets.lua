@@ -9,15 +9,25 @@ local Addon = Actually
 -- officer acknowledges successful processing.
 local RaidTargets = {}
 Addon.RaidTargets = RaidTargets
+local REMINDER_INTERVAL = 300
+local CONTROL_REPLAY_INTERVAL = 5
+local CONTROL_REPLAY_SECONDS = 300
+local RUN_QUERY_INTERVAL = 15
+local PENDING_QUERY_INTERVAL = 300
+local MAX_ACTIVE_PARTICIPANT_RUNS = 8
+local MAX_ACTIVE_RUN_AGE = 6 * 60 * 60
+local TOMBSTONE_RETENTION = 180 * 24 * 60 * 60
+local MAX_TOMBSTONES = 1000
+local MAX_UPLOAD_ATTEMPTS = 20
 
 local KIND = "AL"
-local PROTOCOL = 1
+local PROTOCOL = 2
 local NO_TARGET = "(no target)"
 -- Same checksummed/chunked envelope as Sync.lua. The Assist Log header also
 -- carries a run ID, so its data chunk is slightly smaller to stay <240 bytes.
 local TRANSFER_CHUNK_SIZE = 150
 local TRANSFER_RETRY_SECONDS = 10
-local TRANSFER_SLOW_RETRY_SECONDS = 30
+local TRANSFER_SLOW_RETRY_SECONDS = 300
 local MAX_TRANSFER_CHUNKS = 2000
 local CLOCK_PING_COUNT = 3
 local CLOCK_PING_INTERVAL = 0.45
@@ -39,15 +49,17 @@ local function PlayerKey(identity)
 end
 
 local function Encode(value)
-    return string.gsub(tostring(value or ""), "([^%w%-%._ ])", function(character)
+    local encoded = string.gsub(tostring(value or ""), "([^%w%-%._ ])", function(character)
         return string.format("%%%02X", string.byte(character))
     end)
+    return encoded
 end
 
 local function Decode(value)
-    return string.gsub(value or "", "%%(%x%x)", function(hex)
+    local decoded = string.gsub(value or "", "%%(%x%x)", function(hex)
         return string.char(tonumber(hex, 16))
     end)
+    return decoded
 end
 
 local function Hash(value)
@@ -74,9 +86,23 @@ local function QueuedMessage(message, channel, target)
 end
 
 local function TransportLog(message)
+    -- Participant clients operate silently. Keep Assist Tracker out of the
+    -- shared sync debug log unless this character is authorized to control it.
+    if not Addon.RaidTargets or not Addon.RaidTargets.CanControl
+        or not Addon.RaidTargets:CanControl() then
+        return
+    end
     if Addon.Sync and Addon.Sync.Log then
         Addon.Sync:Log("Assist Log: " .. tostring(message))
     end
+end
+
+local function CopyKeys(source)
+    local copy = {}
+    for key, value in pairs(source or {}) do
+        if value then copy[key] = value end
+    end
+    return copy
 end
 
 local function CurrentTarget()
@@ -158,7 +184,10 @@ local function NormalizeEvents(localChanges, clockOffset, officerStart, duration
 end
 
 local function SerializeParticipantRun(run)
-    local records = { string.format("%.3f", tonumber(run.startedAtLocal) or 0) }
+    local records = { table.concat({
+        string.format("%.3f", tonumber(run.startedAtLocal) or 0),
+        string.format("%.6f", tonumber(run.clockOffsetEstimate) or 0),
+    }, ",") }
     for _, change in ipairs(run.localChanges or {}) do
         table.insert(records, table.concat({
             string.format("%.3f", tonumber(change.at) or 0),
@@ -174,7 +203,8 @@ local function DeserializeParticipantRun(payload)
     for record in string.gmatch((payload or "") .. ";", "(.-);") do
         table.insert(records, record)
     end
-    local startedAtLocal = tonumber(records[1])
+    local startedText, offsetText = string.match(records[1] or "", "^([^,]+),?(.*)$")
+    local startedAtLocal = tonumber(startedText)
     if not startedAtLocal then
         return nil
     end
@@ -190,7 +220,11 @@ local function DeserializeParticipantRun(payload)
             target = Decode(target),
         })
     end
-    return { startedAtLocal = startedAtLocal, localChanges = changes }
+    return {
+        startedAtLocal = startedAtLocal,
+        clockOffsetEstimate = tonumber(offsetText),
+        localChanges = changes,
+    }
 end
 
 local function SplitChunks(payload)
@@ -202,6 +236,29 @@ local function SplitChunks(payload)
         chunks[1] = ""
     end
     return chunks
+end
+
+local function SendStartControl(run, channel, target)
+    return DirectMessage(table.concat({
+        KIND, "S", tostring(PROTOCOL), Encode(run.id), Encode(run.label), Encode(run.caller),
+        string.format("%.3f", tonumber(run.startedAt) or 0), string.format("%.6f", Now()),
+    }, "|"), channel or "RAID", target)
+end
+
+local function SendStopControl(run, channel, target)
+    return DirectMessage(table.concat({
+        KIND, "E", tostring(PROTOCOL), Encode(run.id), string.format("%.3f", tonumber(run.duration) or 0),
+    }, "|"), channel or "RAID", target)
+end
+
+local function SendCancelControl(runID, channel, target)
+    return DirectMessage(table.concat({ KIND, "X", tostring(PROTOCOL), Encode(runID) }, "|"),
+        channel or "RAID", target)
+end
+
+local function SendRunQuery(runID, officer)
+    return DirectMessage(table.concat({ KIND, "V", tostring(PROTOCOL), Encode(runID) }, "|"),
+        "WHISPER", officer)
 end
 
 local function FindFightByID(runID)
@@ -260,6 +317,37 @@ local function MergeSegment(segments, segment)
     end
 end
 
+function RaidTargets:PruneDeletedFights()
+    local tombstones = Addon.db.assistLog.deletedFights or {}
+    local ordered = {}
+    local now = Stamp()
+    for runID, tombstone in pairs(tombstones) do
+        if type(tombstone) ~= "table"
+            or now - (tonumber(tombstone.deletedEpoch) or 0) > TOMBSTONE_RETENTION then
+            tombstones[runID] = nil
+        else
+            table.insert(ordered, { id = runID, timestamp = tonumber(tombstone.deletedEpoch) or 0 })
+        end
+    end
+    table.sort(ordered, function(left, right) return left.timestamp > right.timestamp end)
+    for index = MAX_TOMBSTONES + 1, #ordered do
+        tombstones[ordered[index].id] = nil
+    end
+end
+
+function RaidTargets:TombstoneFight(fight)
+    if not fight or not fight.id then return end
+    Addon.db.assistLog.deletedFights = type(Addon.db.assistLog.deletedFights) == "table"
+        and Addon.db.assistLog.deletedFights or {}
+    Addon.db.assistLog.deletedFights[fight.id] = {
+        deletedEpoch = Stamp(),
+        officerKey = fight.officerKey,
+        expected = CopyKeys(fight.expected),
+    }
+    self:PruneDeletedFights()
+    SendCancelControl(fight.id, "RAID")
+end
+
 function RaidTargets:Initialize()
     if self.initialized then
         return
@@ -269,21 +357,49 @@ function RaidTargets:Initialize()
     Addon.db.assistLog.fights = type(Addon.db.assistLog.fights) == "table" and Addon.db.assistLog.fights or {}
     Addon.db.assistLog.pendingUploads = type(Addon.db.assistLog.pendingUploads) == "table"
         and Addon.db.assistLog.pendingUploads or {}
+    Addon.db.assistLog.deletedFights = type(Addon.db.assistLog.deletedFights) == "table"
+        and Addon.db.assistLog.deletedFights or {}
+    self:PruneDeletedFights()
     -- GetTime() can restart from a smaller value after a full client restart.
     -- Force every unacknowledged saved upload to retry in this login.
     for _, upload in pairs(Addon.db.assistLog.pendingUploads) do
         upload.lastSentAt = 0
+        upload.nextQueryAt = Now() + 2
+        if (tonumber(upload.attempts) or 0) >= MAX_UPLOAD_ATTEMPTS then
+            upload.dormant = true
+        end
     end
 
     self.activeOfficerRun = Addon.db.assistLog.activeOfficerRun
-    self.participantRun = Addon.db.assistLog.activeParticipantRun
+    Addon.db.assistLog.activeParticipantRuns = type(Addon.db.assistLog.activeParticipantRuns) == "table"
+        and Addon.db.assistLog.activeParticipantRuns or {}
+    local legacyParticipantRun = Addon.db.assistLog.activeParticipantRun
+    if type(legacyParticipantRun) == "table" and legacyParticipantRun.id then
+        Addon.db.assistLog.activeParticipantRuns[legacyParticipantRun.id] = legacyParticipantRun
+    end
+    Addon.db.assistLog.activeParticipantRun = nil
+    self.participantRuns = Addon.db.assistLog.activeParticipantRuns
     if self.activeOfficerRun and Now() + 1 < (tonumber(self.activeOfficerRun.startedAt) or 0) then
         self.activeOfficerRun = nil
         Addon.db.assistLog.activeOfficerRun = nil
     end
-    if self.participantRun and Now() + 1 < (tonumber(self.participantRun.startedAtLocal) or 0) then
-        self.participantRun = nil
-        Addon.db.assistLog.activeParticipantRun = nil
+    for runID, run in pairs(self.participantRuns) do
+        if type(run) ~= "table" or not run.id
+            or Now() + 1 < (tonumber(run.startedAtLocal) or 0)
+            or Stamp() - (tonumber(run.startedEpoch) or Stamp()) > MAX_ACTIVE_RUN_AGE then
+            self.participantRuns[runID] = nil
+        else
+            run.nextQueryAt = Now() + 1
+        end
+    end
+    if self.activeOfficerRun then
+        self.activeOfficerRun.nextStartBroadcastAt = Now() + 1
+    end
+    for _, fight in ipairs(Addon.db.assistLog.fights) do
+        if fight.state == "receiving"
+            and Stamp() <= (tonumber(fight.stopBroadcastUntilEpoch) or 0) then
+            fight.nextStopBroadcastAt = Now() + 1
+        end
     end
     self.incomingTransfers = {}
     self.retryElapsed = 0
@@ -340,9 +456,61 @@ function RaidTargets:SetSelectedCaller(specification)
 end
 
 function RaidTargets:HandleCommand(arguments)
+    -- The feature is intentionally undiscoverable through commands for
+    -- ordinary raid members. Their recording/upload work remains headless.
+    if not self:CanControl() then
+        return true
+    end
     local command, rest = string.match(Addon.Util.Trim(arguments), "^(%S+)%s*(.*)$")
     command = string.lower(command or "")
-    if command ~= "caller" then
+    if command == "start" then
+        local run, errorMessage = self:Start(rest ~= "" and rest or "Raid fight")
+        Addon:Print(run and "Assist Tracker started. Use /actually assistlog stop when the fight is over."
+            or errorMessage)
+        return true
+    elseif command == "stop" then
+        local fight, errorMessage = self:Stop()
+        Addon:Print(fight and "Assist Tracker stopped. Waiting for raid uploads." or errorMessage)
+        return true
+    elseif command == "toggle" then
+        if self:IsRunning() then
+            local fight, errorMessage = self:Stop()
+            Addon:Print(fight and "Assist Tracker stopped. Waiting for raid uploads." or errorMessage)
+        else
+            local run, errorMessage = self:Start(rest ~= "" and rest or "Raid fight")
+            Addon:Print(run and "Assist Tracker started. Use this macro again to stop it." or errorMessage)
+        end
+        return true
+    elseif command == "pending" then
+        local option = string.lower(Addon.Util.Trim(rest))
+        if option == "clear" then
+            Addon.db.assistLog.pendingUploads = {}
+            Addon:Print("Cleared all local Assist Tracker pending uploads.")
+        elseif option == "retry" then
+            local retried = 0
+            for _, upload in pairs(Addon.db.assistLog.pendingUploads or {}) do
+                if not upload.retryDisabled then
+                    upload.dormant = nil
+                    upload.attempts = 0
+                    upload.lastSentAt = 0
+                    upload.nextQueryAt = 0
+                    self:SendUpload(upload)
+                    retried = retried + 1
+                end
+            end
+            Addon:Print("Retried " .. tostring(retried) .. " pending Assist Tracker upload(s).")
+        else
+            local total, dormant, failed = 0, 0, 0
+            for _, upload in pairs(Addon.db.assistLog.pendingUploads or {}) do
+                total = total + 1
+                if upload.dormant then dormant = dormant + 1 end
+                if upload.retryDisabled then failed = failed + 1 end
+            end
+            Addon:Print("Pending Assist Tracker uploads: " .. tostring(total)
+                .. " (dormant: " .. tostring(dormant) .. ", too large: " .. tostring(failed) .. ").")
+        end
+        return true
+    elseif command ~= "caller" then
         return false
     end
     if rest == "" then
@@ -402,10 +570,11 @@ function RaidTargets:Start(label)
         return nil, "The selected shot caller is not in this raid. Set one with /actually assistlog caller <player|target|me>."
     end
 
+    label = string.sub(Addon.Util.Trim(label), 1, 60)
     local run = {
         id = tostring(Stamp()) .. "." .. tostring(math.random(100000, 999999)),
-        schema = 1,
-        label = Addon.Util.Trim(label),
+        schema = 2,
+        label = label,
         officer = ShortName(ownName),
         officerKey = PlayerKey(ownName),
         caller = callerName,
@@ -417,6 +586,8 @@ function RaidTargets:Start(label)
         clock = {},
         expected = {},
         state = "recording",
+        nextReminderAt = Now() + REMINDER_INTERVAL,
+        nextStartBroadcastAt = Now() + CONTROL_REPLAY_INTERVAL,
     }
     local count = GetNumRaidMembers()
     for index = 1, count do
@@ -434,10 +605,7 @@ function RaidTargets:Start(label)
     self.clockPingsSent = 0
     self.nextClockPing = Now() + 0.10
 
-    DirectMessage(table.concat({
-        KIND, "S", tostring(PROTOCOL), Encode(run.id), Encode(run.label), Encode(run.caller),
-        string.format("%.3f", run.startedAt),
-    }, "|"), "RAID")
+    SendStartControl(run, "RAID")
     TransportLog("Started " .. run.id .. " for " .. tostring(count) .. " raid members.")
     self:NotifyChanged()
     return run
@@ -453,6 +621,8 @@ function RaidTargets:Stop()
     run.stoppedEpoch = Stamp()
     run.duration = math.max(0, run.stoppedAt - run.startedAt)
     run.state = "receiving"
+    run.stopBroadcastUntilEpoch = Stamp() + CONTROL_REPLAY_SECONDS
+    run.nextStopBroadcastAt = Now() + CONTROL_REPLAY_INTERVAL
 
     local ownPlayer = run.players[run.officerKey] or { name = run.officer }
     ownPlayer.status = "received"
@@ -473,9 +643,7 @@ function RaidTargets:Stop()
     table.insert(Addon.db.assistLog.fights, run)
     Addon.db.assistLog.lastFightID = run.id
 
-    DirectMessage(table.concat({
-        KIND, "E", tostring(PROTOCOL), Encode(run.id), string.format("%.3f", run.duration),
-    }, "|"), "RAID")
+    SendStopControl(run, "RAID")
     TransportLog("Stopped " .. run.id .. "; waiting for post-fight uploads.")
     self:NotifyChanged()
     return run
@@ -485,6 +653,7 @@ function RaidTargets:DeleteFight(runID)
     local fights = self:GetFights()
     for index = #fights, 1, -1 do
         if fights[index].id == runID then
+            self:TombstoneFight(fights[index])
             table.remove(fights, index)
             self:NotifyChanged()
             return true
@@ -519,6 +688,9 @@ end
 function RaidTargets:ClearHistory()
     if self.activeOfficerRun then
         return nil, "Stop the active assist log before clearing history."
+    end
+    for _, fight in ipairs(Addon.db.assistLog.fights or {}) do
+        self:TombstoneFight(fight)
     end
     Addon.db.assistLog.fights = {}
     Addon.db.assistLog.lastFightID = nil
@@ -718,7 +890,16 @@ function RaidTargets:QueueUpload(run)
         createdEpoch = Stamp(),
         lastSentAt = 0,
         attempts = 0,
+        nextQueryAt = Now() + PENDING_QUERY_INTERVAL,
     }
+    if #upload.chunks > MAX_TRANSFER_CHUNKS then
+        upload.retryDisabled = true
+        upload.failedReason = "Timeline exceeds the transfer limit."
+        if self:CanControl() then
+            Addon:Print("An Assist Tracker timeline was too large to upload and remains saved locally."
+                .. " Use /actually assistlog pending to inspect pending data.")
+        end
+    end
     Addon.db.assistLog.pendingUploads[run.id] = upload
     self:SendUpload(upload)
     return upload
@@ -728,9 +909,17 @@ function RaidTargets:SendUpload(upload)
     if not upload or not upload.officer or upload.officer == "" then
         return
     end
+    if upload.retryDisabled or upload.dormant then return end
+    if (tonumber(upload.attempts) or 0) >= MAX_UPLOAD_ATTEMPTS then
+        upload.dormant = true
+        TransportLog("Paused an unacknowledged upload after " .. tostring(MAX_UPLOAD_ATTEMPTS) .. " attempts.")
+        return
+    end
     upload.chunks = type(upload.chunks) == "table" and upload.chunks or SplitChunks(upload.payload or "")
     local total = #upload.chunks
     if total > MAX_TRANSFER_CHUNKS then
+        upload.retryDisabled = true
+        upload.failedReason = "Timeline exceeds the transfer limit."
         return
     end
     for index, chunk in ipairs(upload.chunks) do
@@ -762,11 +951,22 @@ function RaidTargets:ApplyTransfer(fight, sender, transferID, payload)
         }, "|"), "WHISPER", sender)
         return true
     end
+    local existingPlayer = fight.players and fight.players[key]
+    if existingPlayer and existingPlayer.status == "received" and existingPlayer.changes then
+        -- A retransmission may use a new transfer ID after saved-data recovery.
+        -- Once accepted, never let a later payload silently rewrite history.
+        QueuedMessage(table.concat({
+            KIND, "C", tostring(PROTOCOL), Encode(fight.id), Encode(transferID),
+        }, "|"), "WHISPER", sender)
+        return true
+    end
     local clock = fight.clock and fight.clock[key]
     local offset = clock and tonumber(clock.offset)
     if not offset then
-        -- Fallback only. The normal path uses the lowest-RTT NTP-style ping.
-        offset = decoded.startedAtLocal - fight.startedAt
+        -- Fallback only. The normal path uses the lowest-RTT NTP-style ping,
+        -- followed by the START acknowledgement estimate. The participant's
+        -- estimate still places late-discovery data at the correct fight time.
+        offset = decoded.clockOffsetEstimate or (decoded.startedAtLocal - fight.startedAt)
     end
     local player = fight.players[key] or { name = ShortName(sender) }
     player.name = ShortName(sender)
@@ -784,11 +984,37 @@ function RaidTargets:ApplyTransfer(fight, sender, transferID, payload)
     return true
 end
 
-function RaidTargets:HandleStart(runID, label, caller, sender)
+function RaidTargets:HandleStart(runID, label, caller, controllerSentAt, sender)
     -- This follows the tier-sync authority model: the originating client
     -- gates the action with Official:IsOfficer(), and peers accept the synced
     -- result. Recipients still require the sender to be in their live raid.
-    if not IsRaidMember(sender) or self.participantRun then
+    if not IsRaidMember(sender) or not runID or runID == "" then
+        return
+    end
+    self.participantRuns = self.participantRuns or {}
+    local existing = self.participantRuns[runID]
+    if existing then
+        if PlayerKey(sender) == existing.officerKey then
+            DirectMessage(table.concat({
+                KIND, "A", tostring(PROTOCOL), Encode(existing.id),
+                string.format("%.6f", existing.startedAtLocal), Encode(Addon.version),
+            }, "|"), "WHISPER", existing.officer)
+        end
+        return
+    end
+    local senderKey = PlayerKey(sender)
+    local activeCount = 0
+    for existingID, activeRun in pairs(self.participantRuns) do
+        activeCount = activeCount + 1
+        if activeRun.officerKey == senderKey then
+            -- One controller can only own one live watch. A newer START from
+            -- that controller supersedes a stale watch whose STOP was missed.
+            self.participantRuns[existingID] = nil
+            activeCount = activeCount - 1
+        end
+    end
+    if activeCount >= MAX_ACTIVE_PARTICIPANT_RUNS then
+        TransportLog("Ignored START because the participant watch cap was reached.")
         return
     end
     local run = {
@@ -798,11 +1024,13 @@ function RaidTargets:HandleStart(runID, label, caller, sender)
         officer = ShortName(sender),
         officerKey = PlayerKey(sender),
         startedAtLocal = Now(),
+        clockOffsetEstimate = Now() - (tonumber(controllerSentAt) or Now()),
         startedEpoch = Stamp(),
         localChanges = {},
+        nextQueryAt = Now() + RUN_QUERY_INTERVAL,
     }
-    self.participantRun = run
-    Addon.db.assistLog.activeParticipantRun = run
+    self.participantRuns[runID] = run
+    Addon.db.assistLog.activeParticipantRuns = self.participantRuns
     CaptureLocalChange(run)
     DirectMessage(table.concat({
         KIND, "A", tostring(PROTOCOL), Encode(run.id), string.format("%.6f", run.startedAtLocal), Encode(Addon.version),
@@ -810,15 +1038,25 @@ function RaidTargets:HandleStart(runID, label, caller, sender)
 end
 
 function RaidTargets:HandleStop(runID, duration, sender)
-    local run = self.participantRun
-    if not run or run.id ~= runID or PlayerKey(sender) ~= run.officerKey then
+    local run = self.participantRuns and self.participantRuns[runID]
+    if not run then
+        local upload = Addon.db.assistLog.pendingUploads[runID]
+        if upload and PlayerKey(sender) == PlayerKey(upload.officer) and upload.dormant then
+            upload.dormant = nil
+            upload.attempts = 0
+            upload.lastSentAt = 0
+            self:SendUpload(upload)
+        end
+        return
+    end
+    if run.id ~= runID or PlayerKey(sender) ~= run.officerKey then
         return
     end
     CaptureLocalChange(run)
     run.duration = tonumber(duration) or 0
     run.stoppedAtLocal = Now()
-    self.participantRun = nil
-    Addon.db.assistLog.activeParticipantRun = nil
+    self.participantRuns[runID] = nil
+    Addon.db.assistLog.activeParticipantRuns = self.participantRuns
     self:QueueUpload(run)
 end
 
@@ -845,12 +1083,31 @@ function RaidTargets:HandleClockResponse(runID, pingID, officerSentAt, peerRecei
 end
 
 function RaidTargets:HandleDataChunk(runID, transferID, index, total, digest, chunk, sender)
-    local fight = FindFightByID(runID)
-    if not fight or not index or not total or total < 1 or total > MAX_TRANSFER_CHUNKS or index > total then
+    if not index or not total or total < 1 or total > MAX_TRANSFER_CHUNKS or index > total then
         return
     end
-    if fight.expected and not fight.expected[PlayerKey(sender)] then
+    local tombstone = Addon.db.assistLog.deletedFights and Addon.db.assistLog.deletedFights[runID]
+    if tombstone then
+        if tombstone.expected and tombstone.expected[PlayerKey(sender)] then
+            QueuedMessage(table.concat({
+                KIND, "C", tostring(PROTOCOL), Encode(runID), Encode(transferID),
+            }, "|"), "WHISPER", sender)
+        end
         return
+    end
+    local fight = FindFightByID(runID)
+    if not fight then return end
+    local senderKey = PlayerKey(sender)
+    if fight.expected and not fight.expected[senderKey] then
+        if fight.state == "receiving" and IsRaidMember(sender) then
+            fight.expected[senderKey] = ShortName(sender)
+            fight.players = fight.players or {}
+            fight.players[senderKey] = fight.players[senderKey] or {
+                name = ShortName(sender), status = "awaiting upload",
+            }
+        else
+            return
+        end
     end
     local transferKey = PlayerKey(sender) .. ":" .. transferID
     local transfer = self.incomingTransfers[transferKey]
@@ -893,14 +1150,17 @@ function RaidTargets:HandleMessage(message, channel, sender)
         return
     end
 
-    if action == "S" and channel == "RAID" then
-        local runID, label, caller = string.match(rest, "^([^|]+)|([^|]*)|([^|]*)|")
-        self:HandleStart(Decode(runID), Decode(label), Decode(caller), sender)
+    if action == "S" and (channel == "RAID" or channel == "WHISPER") then
+        local runID, label, caller, _, controllerSentAt = string.match(rest,
+            "^([^|]+)|([^|]*)|([^|]*)|([^|]+)|([^|]+)$")
+        self:HandleStart(Decode(runID), Decode(label), Decode(caller), controllerSentAt, sender)
     elseif action == "A" and channel == "WHISPER" then
         local runID, localStart, version = string.match(rest, "^([^|]+)|([^|]+)|([^|]*)$")
         local fight = FindFightByID(Decode(runID))
-        if fight and fight.state == "recording" then
+        if fight and fight.state == "recording" and IsRaidMember(sender) then
             local key = PlayerKey(sender)
+            fight.expected = fight.expected or {}
+            fight.expected[key] = ShortName(sender)
             local player = fight.players[key] or { name = ShortName(sender) }
             player.status = "recording"
             player.version = Decode(version)
@@ -917,13 +1177,13 @@ function RaidTargets:HandleMessage(message, channel, sender)
     elseif action == "P" and channel == "RAID" then
         local runID, pingID, officerSentAt = string.match(rest, "^([^|]+)|([^|]+)|([^|]+)$")
         runID = Decode(runID)
-        if self.participantRun and self.participantRun.id == runID
-            and PlayerKey(sender) == self.participantRun.officerKey then
+        local participantRun = self.participantRuns and self.participantRuns[runID]
+        if participantRun and PlayerKey(sender) == participantRun.officerKey then
             local receivedAt = Now()
             local sentAt = Now()
             DirectMessage(table.concat({ KIND, "R", tostring(PROTOCOL), Encode(runID), pingID,
                 officerSentAt, string.format("%.6f", receivedAt), string.format("%.6f", sentAt) }, "|"),
-                "WHISPER", self.participantRun.officer)
+                "WHISPER", participantRun.officer)
         end
     elseif action == "R" and channel == "WHISPER" then
         local runID, pingID, t0, t1, t2 = string.match(rest,
@@ -932,6 +1192,39 @@ function RaidTargets:HandleMessage(message, channel, sender)
     elseif action == "E" and channel == "RAID" then
         local runID, duration = string.match(rest, "^([^|]+)|([^|]+)$")
         self:HandleStop(Decode(runID), duration, sender)
+    elseif action == "E" and channel == "WHISPER" then
+        local runID, duration = string.match(rest, "^([^|]+)|([^|]+)$")
+        self:HandleStop(Decode(runID), duration, sender)
+    elseif action == "V" and channel == "WHISPER" then
+        local runID = Decode(rest)
+        local fight = FindFightByID(runID)
+        local senderKey = PlayerKey(sender)
+        if fight and fight.officerKey == PlayerKey(UnitName("player"))
+            and ((fight.state == "recording" and IsRaidMember(sender))
+                or (fight.expected and fight.expected[senderKey])
+                or (fight.state == "receiving" and IsRaidMember(sender))) then
+            if fight.state == "recording" then
+                SendStartControl(fight, "WHISPER", sender)
+            else
+                fight.expected = fight.expected or {}
+                fight.expected[senderKey] = ShortName(sender)
+                SendStopControl(fight, "WHISPER", sender)
+            end
+        else
+            SendCancelControl(runID, "WHISPER", sender)
+        end
+    elseif action == "X" and (channel == "RAID" or channel == "WHISPER") then
+        local runID = Decode(rest)
+        local active = self.participantRuns and self.participantRuns[runID]
+        local pending = Addon.db.assistLog.pendingUploads[runID]
+        local senderKey = PlayerKey(sender)
+        if active and senderKey == active.officerKey then
+            self.participantRuns[runID] = nil
+        end
+        if pending and senderKey == PlayerKey(pending.officer) then
+            Addon.db.assistLog.pendingUploads[runID] = nil
+        end
+        self:NotifyChanged()
     elseif action == "D" and channel == "WHISPER" then
         local runID, transferID, index, total, digest, chunk = string.match(rest,
             "^([^|]+)|([^|]+)|(%d+)|(%d+)|([^|]+)|(.*)$")
@@ -953,7 +1246,14 @@ end
 function RaidTargets:OnEvent(event, ...)
     if event == "PLAYER_TARGET_CHANGED" then
         CaptureLocalChange(self.activeOfficerRun)
-        CaptureLocalChange(self.participantRun)
+        for _, run in pairs(self.participantRuns or {}) do
+            CaptureLocalChange(run)
+        end
+        return
+    end
+    if event == "RAID_ROSTER_UPDATE" then
+        if self.activeOfficerRun then self.activeOfficerRun.nextStartBroadcastAt = 0 end
+        for _, run in pairs(self.participantRuns or {}) do run.nextQueryAt = 0 end
         return
     end
     if event == "CHAT_MSG_ADDON" then
@@ -965,18 +1265,69 @@ function RaidTargets:OnEvent(event, ...)
 end
 
 function RaidTargets:OnUpdate(elapsed)
+    local now = Now()
+    local epoch = Stamp()
+    if self.activeOfficerRun and now >= (tonumber(self.activeOfficerRun.nextStartBroadcastAt) or 0) then
+        SendStartControl(self.activeOfficerRun, "RAID")
+        self.activeOfficerRun.nextStartBroadcastAt = now + CONTROL_REPLAY_INTERVAL
+    end
     if self.activeOfficerRun and self.clockPingsSent < CLOCK_PING_COUNT and Now() >= self.nextClockPing then
         self:SendClockPing()
         self.nextClockPing = Now() + CLOCK_PING_INTERVAL
+    end
+
+    local function RemindController(run)
+        if not run then return end
+        local startedAt = tonumber(run.startedAt or run.startedAtLocal) or Now()
+        run.nextReminderAt = tonumber(run.nextReminderAt) or (startedAt + REMINDER_INTERVAL)
+        if Now() >= run.nextReminderAt then
+            local minutes = math.max(5, math.floor((Now() - startedAt) / 60))
+            Addon:Print("Assist Tracker is still recording (" .. tostring(minutes)
+                .. " minutes). Stop it with /actually assistlog stop when the fight is over.")
+            run.nextReminderAt = Now() + REMINDER_INTERVAL
+        end
+    end
+    RemindController(self.activeOfficerRun)
+
+    for _, fight in ipairs(Addon.db.assistLog.fights or {}) do
+        if fight.state == "receiving" and epoch <= (tonumber(fight.stopBroadcastUntilEpoch) or 0)
+            and now >= (tonumber(fight.nextStopBroadcastAt) or 0) then
+            SendStopControl(fight, "RAID")
+            fight.nextStopBroadcastAt = now + CONTROL_REPLAY_INTERVAL
+        end
+    end
+
+    for runID, run in pairs(self.participantRuns or {}) do
+        if epoch - (tonumber(run.startedEpoch) or epoch) > MAX_ACTIVE_RUN_AGE then
+            self.participantRuns[runID] = nil
+            TransportLog("Expired stale participant watch " .. tostring(runID) .. ".")
+        elseif now >= (tonumber(run.nextQueryAt) or 0) then
+            SendRunQuery(runID, run.officer)
+            run.nextQueryAt = now + RUN_QUERY_INTERVAL
+        end
+    end
+
+    for runID, upload in pairs(Addon.db.assistLog.pendingUploads or {}) do
+        if now >= (tonumber(upload.nextQueryAt) or 0) then
+            SendRunQuery(runID, upload.officer)
+            upload.nextQueryAt = now + PENDING_QUERY_INTERVAL
+        end
+    end
+
+    self.cleanupElapsed = (self.cleanupElapsed or 0) + elapsed
+    if self.cleanupElapsed >= 60 then
+        self.cleanupElapsed = 0
+        self:PruneDeletedFights()
     end
 
     self.retryElapsed = (self.retryElapsed or 0) + elapsed
     if self.retryElapsed >= 2 then
         self.retryElapsed = 0
         for _, upload in pairs(Addon.db.assistLog.pendingUploads or {}) do
-            local retryDelay = (upload.attempts or 0) <= 2
-                and TRANSFER_RETRY_SECONDS or TRANSFER_SLOW_RETRY_SECONDS
-            if Now() - (upload.lastSentAt or 0) >= retryDelay then
+            local retryDelay = (upload.attempts or 0) <= 2 and TRANSFER_RETRY_SECONDS
+                or TRANSFER_SLOW_RETRY_SECONDS
+            if not upload.retryDisabled and not upload.dormant
+                and Now() - (upload.lastSentAt or 0) >= retryDelay then
                 self:SendUpload(upload)
             end
         end

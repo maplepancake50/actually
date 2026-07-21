@@ -6,14 +6,15 @@ local Util = Addon.Util or {}
 Addon.Util = Util
 
 Addon.name = addonName or "actually"
-Addon.version = "0.1.0"
+Addon.version = "0.2.0"
 Addon.MESSAGE_PREFIX = "ACTUALLY"
 Addon.tierOrder = { "S", "A", "B", "C", "D", "U" }
 Addon.DEFAULT_PERSONAL_LIST_NAME = "My Tier List"
 Addon.OFFICIAL_LIST_NAME = "Official Tier List"
 
 function Util.Trim(value)
-    return string.gsub(tostring(value or ""), "^%s*(.-)%s*$", "%1")
+    local trimmed = string.gsub(tostring(value or ""), "^%s*(.-)%s*$", "%1")
+    return trimmed
 end
 
 function Util.ShortName(identity)
@@ -71,6 +72,8 @@ local defaults = {
     assistLog = {
         fights = {},
         pendingUploads = {},
+        activeParticipantRuns = {},
+        deletedFights = {},
     },
     backups = {
         snapshots = {},
@@ -192,6 +195,10 @@ local function InitializeListStorage(db)
     db.assistLog.fights = type(db.assistLog.fights) == "table" and db.assistLog.fights or {}
     db.assistLog.pendingUploads = type(db.assistLog.pendingUploads) == "table"
         and db.assistLog.pendingUploads or {}
+    db.assistLog.activeParticipantRuns = type(db.assistLog.activeParticipantRuns) == "table"
+        and db.assistLog.activeParticipantRuns or {}
+    db.assistLog.deletedFights = type(db.assistLog.deletedFights) == "table"
+        and db.assistLog.deletedFights or {}
     db.backups = type(db.backups) == "table" and db.backups or {}
     db.backups.snapshots = type(db.backups.snapshots) == "table" and db.backups.snapshots or {}
 
@@ -363,7 +370,7 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
             Addon.AssistLogUI:Show()
         elseif string.sub(lowerMessage, 1, 10) == "assistlog " and Addon.RaidTargets then
             if not Addon.RaidTargets:HandleCommand(string.sub(rawMessage, 11)) then
-                Addon:Print("Assist Log commands: /actually assistlog, /actually assistlog caller <raid player|target|me>")
+                Addon:Print("Assist Tracker: start [fight], stop, toggle [fight], caller <player|target|me>, pending [retry|clear]")
             end
         elseif (lowerMessage == "caller" or lowerMessage == "shotcaller") and Addon.RaidTargets then
             Addon.RaidTargets:HandleCommand("caller")

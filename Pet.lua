@@ -194,7 +194,7 @@ local CHATTER = {
     "HOTs are just pad for heals",
     "FRESH",
     "FRESH SOUTHSHORE",
-    "consumes allowed in wargames. I already used.",
+    "Consumes are allowed in Wargames",
     "I hate frontlines",
     "anyone got fap?",
     "can anyone shotcall?",
