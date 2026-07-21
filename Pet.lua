@@ -18,7 +18,6 @@ local LEVITATE_CLOUD_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPet
 local MERCENARY_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetMercenary"
 local SPEECH_BUBBLE_TEXTURE = "Interface\\AddOns\\actually\\Textures\\ActuallyPetSpeechBubble"
 local ACTION_BOX_TEXTURE = "Interface\\AddOns\\actually\\Textures\\ActuallyPetActionBox"
-local GHOST_AURA_TEXTURE = "Interface\\AddOns\\actually\\Textures\\ActuallyPetGhostAura"
 local RAPID_CLICK_COUNT = 5
 local RAPID_CLICK_WINDOW = 1.75
 local CROW_RETURN_DELAY = 6
@@ -313,17 +312,6 @@ function Pet:SetSpriteFrame(frameNumber)
     )
 end
 
-function Pet:SetGhostAuraFrame(frameNumber)
-    if not self.ghostAuraTexture then
-        return
-    end
-
-    local zeroIndex = frameNumber - 1
-    local column = zeroIndex % 2
-    local row = math.floor(zeroIndex / 2)
-    self.ghostAuraTexture:SetTexCoord(column / 2, (column + 1) / 2, row / 2, (row + 1) / 2)
-end
-
 function Pet:IsPlayerCastingMercenary()
     if UnitCastingInfo then
         local spellName, _, _, _, _, _, _, _, spellID = UnitCastingInfo("player")
@@ -383,42 +371,6 @@ function Pet:HandleSpellcastEvent(event, unit, ...)
         or event == "UNIT_SPELLCAST_CHANNEL_STOP" then
         self:StopMercenaryCast()
     end
-end
-
-function Pet:SetGhostState(isGhost)
-    isGhost = isGhost and true or false
-    if self.isGhost == isGhost or not self.texture then
-        return
-    end
-
-    self.isGhost = isGhost
-    if isGhost then
-        self.texture:SetDesaturated(true)
-        self.texture:SetVertexColor(0.55, 0.88, 1, 0.68)
-        self.ghostAuraClock = 0
-        self:SetGhostAuraFrame(1)
-        self.ghostAuraTexture:SetAlpha(0.34)
-        self.ghostAuraTexture:Show()
-    else
-        self.texture:SetDesaturated(false)
-        self.texture:SetVertexColor(1, 1, 1, 1)
-        self.ghostAuraTexture:Hide()
-    end
-end
-
-function Pet:RefreshGhostState()
-    self:SetGhostState(UnitIsDeadOrGhost and UnitIsDeadOrGhost("player"))
-end
-
-function Pet:UpdateGhostAura(elapsed)
-    if not self.isGhost or not self.ghostAuraTexture then
-        return
-    end
-
-    self.ghostAuraClock = (self.ghostAuraClock or 0) + elapsed
-    local frameNumber = math.floor(self.ghostAuraClock / 0.55) % 3 + 1
-    self:SetGhostAuraFrame(frameNumber)
-    self.ghostAuraTexture:SetAlpha(0.30 + 0.07 * (0.5 + 0.5 * math.sin(self.ghostAuraClock * 2.4)))
 end
 
 function Pet:SetSheet(sheet)
@@ -1095,7 +1047,6 @@ function Pet:UpdateThought(elapsed)
 end
 
 function Pet:Update(elapsed)
-    self:UpdateGhostAura(elapsed)
     if self:UpdateCrowLaunch(elapsed) then
         return
     end
@@ -1335,17 +1286,11 @@ function Pet:Create()
     button:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     button:RegisterForDrag("LeftButton")
 
-    local ghostAura = button:CreateTexture(nil, "BACKGROUND")
-    ghostAura:SetTexture(GHOST_AURA_TEXTURE)
-    ghostAura:SetWidth(154)
-    ghostAura:SetHeight(154)
-    ghostAura:SetPoint("CENTER", button, "CENTER", 0, -2)
-    ghostAura:SetBlendMode("ADD")
-    ghostAura:Hide()
-    self.ghostAuraTexture = ghostAura
-
     local texture = button:CreateTexture(nil, "ARTWORK")
     texture:SetAllPoints(button)
+    texture:SetDesaturated(false)
+    texture:SetVertexColor(1, 1, 1, 1)
+    texture:SetAlpha(1)
     self.texture = texture
     self.frame = button
     self:SetSheet("main")
@@ -1358,10 +1303,6 @@ function Pet:Create()
     self:CreateSnoreEffect(button)
     self:ApplyPosition()
     self:ResetTimers()
-    button:RegisterEvent("PLAYER_ENTERING_WORLD")
-    button:RegisterEvent("PLAYER_DEAD")
-    button:RegisterEvent("PLAYER_ALIVE")
-    button:RegisterEvent("PLAYER_UNGHOST")
     button:RegisterEvent("UNIT_SPELLCAST_START")
     button:RegisterEvent("UNIT_SPELLCAST_STOP")
     button:RegisterEvent("UNIT_SPELLCAST_FAILED")
@@ -1370,16 +1311,8 @@ function Pet:Create()
     button:RegisterEvent("UNIT_SPELLCAST_CHANNEL_START")
     button:RegisterEvent("UNIT_SPELLCAST_CHANNEL_STOP")
     button:SetScript("OnEvent", function(_, event, ...)
-        if event == "PLAYER_ENTERING_WORLD"
-            or event == "PLAYER_DEAD"
-            or event == "PLAYER_ALIVE"
-            or event == "PLAYER_UNGHOST" then
-            Pet:RefreshGhostState()
-        else
-            Pet:HandleSpellcastEvent(event, ...)
-        end
+        Pet:HandleSpellcastEvent(event, ...)
     end)
-    self:RefreshGhostState()
 
     button:SetScript("OnUpdate", function(_, elapsed)
         Pet:Update(elapsed)

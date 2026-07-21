@@ -12,6 +12,8 @@ TierBoard.lua
 BatchCapture.lua
 Gear.lua
 Sync.lua
+RaidTargets.lua
+AssistLogUI.lua
 MinimapButton.lua
 Pet.lua
 BuildAnalyzer.lua

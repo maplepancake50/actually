@@ -8,27 +8,27 @@ local SetBackdrop = Addon.Util.SetBackdrop
 local MAX_VISIBLE_SETS = 10
 
 local SLOT_LAYOUT = {
-    { key = "head", label = "Head", inventory = "HeadSlot", x = 30, y = -55, side = "left" },
-    { key = "neck", label = "Neck", inventory = "NeckSlot", x = 30, y = -105, side = "left" },
-    { key = "shoulder", label = "Shoulders", inventory = "ShoulderSlot", x = 30, y = -155, side = "left" },
-    { key = "back", label = "Back", inventory = "BackSlot", x = 30, y = -205, side = "left" },
-    { key = "chest", label = "Chest", inventory = "ChestSlot", x = 30, y = -255, side = "left" },
-    { key = "shirt", label = "Shirt", inventory = "ShirtSlot", x = 30, y = -305, side = "left" },
-    { key = "tabard", label = "Tabard", inventory = "TabardSlot", x = 30, y = -355, side = "left" },
-    { key = "wrist", label = "Wrist", inventory = "WristSlot", x = 30, y = -405, side = "left" },
+    { key = "head", label = "Head", inventory = "HeadSlot", x = 24, y = -62, side = "left" },
+    { key = "neck", label = "Neck", inventory = "NeckSlot", x = 24, y = -111, side = "left" },
+    { key = "shoulder", label = "Shoulders", inventory = "ShoulderSlot", x = 24, y = -160, side = "left" },
+    { key = "back", label = "Back", inventory = "BackSlot", x = 24, y = -209, side = "left" },
+    { key = "chest", label = "Chest", inventory = "ChestSlot", x = 24, y = -258, side = "left" },
+    { key = "shirt", label = "Shirt", inventory = "ShirtSlot", x = 24, y = -307, side = "left" },
+    { key = "tabard", label = "Tabard", inventory = "TabardSlot", x = 24, y = -356, side = "left" },
+    { key = "wrist", label = "Wrist", inventory = "WristSlot", x = 24, y = -405, side = "left" },
 
-    { key = "hands", label = "Hands", inventory = "HandsSlot", x = 334, y = -55, side = "right" },
-    { key = "waist", label = "Waist", inventory = "WaistSlot", x = 334, y = -105, side = "right" },
-    { key = "legs", label = "Legs", inventory = "LegsSlot", x = 334, y = -155, side = "right" },
-    { key = "feet", label = "Feet", inventory = "FeetSlot", x = 334, y = -205, side = "right" },
-    { key = "finger1", label = "Ring 1", inventory = "Finger0Slot", x = 334, y = -255, side = "right" },
-    { key = "finger2", label = "Ring 2", inventory = "Finger1Slot", x = 334, y = -305, side = "right" },
-    { key = "trinket1", label = "Trinket 1", inventory = "Trinket0Slot", x = 334, y = -355, side = "right" },
-    { key = "trinket2", label = "Trinket 2", inventory = "Trinket1Slot", x = 334, y = -405, side = "right" },
+    { key = "hands", label = "Hands", inventory = "HandsSlot", x = 364, y = -62, side = "right" },
+    { key = "waist", label = "Waist", inventory = "WaistSlot", x = 364, y = -111, side = "right" },
+    { key = "legs", label = "Legs", inventory = "LegsSlot", x = 364, y = -160, side = "right" },
+    { key = "feet", label = "Feet", inventory = "FeetSlot", x = 364, y = -209, side = "right" },
+    { key = "finger1", label = "Ring 1", inventory = "Finger0Slot", x = 364, y = -258, side = "right" },
+    { key = "finger2", label = "Ring 2", inventory = "Finger1Slot", x = 364, y = -307, side = "right" },
+    { key = "trinket1", label = "Trinket 1", inventory = "Trinket0Slot", x = 364, y = -356, side = "right" },
+    { key = "trinket2", label = "Trinket 2", inventory = "Trinket1Slot", x = 364, y = -405, side = "right" },
 
-    { key = "mainhand", label = "Main Hand", inventory = "MainHandSlot", x = 107, side = "bottom" },
-    { key = "offhand", label = "Off Hand", inventory = "SecondaryHandSlot", x = 176, side = "bottom" },
-    { key = "ranged", label = "Ranged / Relic", inventory = "RangedSlot", x = 245, side = "bottom" },
+    { key = "mainhand", label = "Main Hand", inventory = "MainHandSlot", x = 116, side = "bottom" },
+    { key = "offhand", label = "Off Hand", inventory = "SecondaryHandSlot", x = 184, side = "bottom" },
+    { key = "ranged", label = "Ranged / Relic", inventory = "RangedSlot", x = 252, side = "bottom" },
 }
 
 local function Now()
@@ -308,6 +308,27 @@ function Gear:SelectSlot(slotKey)
     self:RefreshSlots()
 end
 
+function Gear:RefreshSlotGuide()
+    if not self.slotGuideTitle or not self.slotGuideText then
+        return
+    end
+
+    local button = self.selectedSlot and self.slotButtons[self.selectedSlot]
+    if button then
+        self.slotGuideTitle:SetText("SELECTED: " .. string.upper(button.slotLabel or self.selectedSlot))
+        self.slotGuideTitle:SetTextColor(0.42, 0.88, 1)
+        self.slotGuideText:SetText(self:IsOfficer()
+            and "Shift-click an item link\nto place it in this slot."
+            or "Hover the equipped item\nto inspect its details.")
+    else
+        self.slotGuideTitle:SetText("BUILD LOADOUT")
+        self.slotGuideTitle:SetTextColor(0.48, 0.74, 0.92)
+        self.slotGuideText:SetText(self:IsOfficer()
+            and "Choose a slot, then Shift-click\nan item link from bags or chat."
+            or "Hover any equipped item\nto inspect its details.")
+    end
+end
+
 function Gear:RefreshSlots()
     if not self.slotButtons then
         return
@@ -347,6 +368,7 @@ function Gear:RefreshSlots()
             button.selection:Hide()
         end
     end
+    self:RefreshSlotGuide()
 end
 
 function Gear:RefreshSetButtons(sets)
@@ -382,6 +404,9 @@ function Gear:RefreshSetButtons(sets)
         end
     end
     self.pageText:SetText(#sets == 0 and "No saved builds" or (tostring(self.setOffset + 1) .. "-" .. tostring(math.min(#sets, self.setOffset + MAX_VISIBLE_SETS)) .. " of " .. tostring(#sets)))
+    if self.buildCountText then
+        self.buildCountText:SetText(tostring(#sets) .. (#sets == 1 and " SAVED BUILD" or " SAVED BUILDS"))
+    end
 end
 
 function Gear:RefreshPermissions()
@@ -476,6 +501,7 @@ function Gear:CreateSlot(parent, slotInfo)
 
     local _, emptyTexture = GetInventorySlotInfo(slotInfo.inventory)
     button.emptyTexture = emptyTexture
+    button.slotLabel = slotInfo.label
 
     local selection = button:CreateTexture(nil, "OVERLAY")
     selection:SetAllPoints(button)
@@ -528,41 +554,70 @@ function Gear:Create(parent)
     if self.frame then
         return
     end
+
     local frame = CreateFrame("Frame", nil, parent)
     frame:SetPoint("TOPLEFT", parent, "TOPLEFT", 5, -5)
     frame:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -5, 80)
-    frame:SetFrameLevel(parent:GetFrameLevel() + 20)
-    SetBackdrop(frame, { 0.018, 0.026, 0.040, 0.995 }, { 0.28, 0.78, 1.00, 1 })
+    frame:SetFrameLevel(parent:GetFrameLevel() + 24)
+    SetBackdrop(frame, { 0.015, 0.022, 0.034, 0.998 }, { 0.28, 0.78, 1.00, 1 })
     frame:Hide()
     self.frame = frame
 
-    local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, -17)
-    title:SetText("Official Gear Builds")
+    local headerBar = CreateFrame("Frame", nil, frame)
+    headerBar:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -10)
+    headerBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -12, -10)
+    headerBar:SetHeight(52)
+    SetBackdrop(headerBar, { 0.028, 0.055, 0.080, 0.99 }, { 0.20, 0.55, 0.75, 0.95 })
 
-    local permission = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    permission:SetPoint("TOPLEFT", frame, "TOPLEFT", 18, -43)
-    permission:SetWidth(570)
+    local gearIcon = headerBar:CreateTexture(nil, "ARTWORK")
+    gearIcon:SetWidth(36)
+    gearIcon:SetHeight(36)
+    gearIcon:SetPoint("LEFT", headerBar, "LEFT", 10, 0)
+    gearIcon:SetTexture("Interface\\AddOns\\actually\\Textures\\TabIconGear")
+    gearIcon:SetAlpha(0.95)
+
+    local title = headerBar:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", headerBar, "TOPLEFT", 55, -8)
+    title:SetText("Official Gear Builds")
+    title:SetTextColor(1, 0.82, 0.24)
+
+    local permission = headerBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    permission:SetPoint("TOPLEFT", headerBar, "TOPLEFT", 55, -30)
+    permission:SetWidth(600)
     permission:SetJustifyH("LEFT")
     self.permissionText = permission
 
+    local buildCount = headerBar:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    buildCount:SetPoint("RIGHT", headerBar, "RIGHT", -18, 0)
+    buildCount:SetWidth(170)
+    buildCount:SetJustifyH("RIGHT")
+    buildCount:SetTextColor(0.42, 0.80, 1)
+    self.buildCountText = buildCount
+
     local leftPane = CreateFrame("Frame", nil, frame)
-    leftPane:SetPoint("TOPLEFT", frame, "TOPLEFT", 14, -68)
+    leftPane:SetPoint("TOPLEFT", frame, "TOPLEFT", 14, -72)
     leftPane:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 14, 52)
-    leftPane:SetWidth(176)
+    leftPane:SetWidth(180)
     leftPane:EnableMouse(true)
     leftPane:EnableMouseWheel(true)
-    SetBackdrop(leftPane, { 0.03, 0.04, 0.055, 0.98 }, { 0.13, 0.32, 0.43, 1 })
+    SetBackdrop(leftPane, { 0.026, 0.038, 0.055, 0.99 }, { 0.16, 0.42, 0.60, 1 })
 
-    local buildsLabel = leftPane:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    buildsLabel:SetPoint("TOPLEFT", leftPane, "TOPLEFT", 10, -10)
+    local buildsHeader = CreateFrame("Frame", nil, leftPane)
+    buildsHeader:SetPoint("TOPLEFT", leftPane, "TOPLEFT", 1, -1)
+    buildsHeader:SetPoint("TOPRIGHT", leftPane, "TOPRIGHT", -1, -1)
+    buildsHeader:SetHeight(38)
+    SetBackdrop(buildsHeader, { 0.045, 0.095, 0.135, 0.98 }, { 0.12, 0.30, 0.42, 0 })
+
+    local buildsLabel = buildsHeader:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    buildsLabel:SetPoint("LEFT", buildsHeader, "LEFT", 10, 0)
     buildsLabel:SetText("SAVED BUILDS")
+    buildsLabel:SetTextColor(0.48, 0.82, 1)
 
     for index = 1, MAX_VISIBLE_SETS do
         local button = CreateFrame("Button", nil, leftPane)
-        button:SetWidth(156)
-        button:SetHeight(40)
-        button:SetPoint("TOPLEFT", leftPane, "TOPLEFT", 10, -(35 + (index - 1) * 44))
+        button:SetWidth(160)
+        button:SetHeight(34)
+        button:SetPoint("TOPLEFT", leftPane, "TOPLEFT", 10, -(48 + (index - 1) * 38))
         SetBackdrop(button, { 0.055, 0.075, 0.105, 0.98 }, { 0.14, 0.28, 0.40, 1 })
         local buttonText = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         buttonText:SetPoint("LEFT", button, "LEFT", 9, 0)
@@ -577,7 +632,7 @@ function Gear:Create(parent)
     end
 
     local pageText = leftPane:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    pageText:SetPoint("BOTTOM", leftPane, "BOTTOM", 0, 12)
+    pageText:SetPoint("BOTTOM", leftPane, "BOTTOM", 0, 45)
     pageText:SetTextColor(0.5, 0.65, 0.75)
     self.pageText = pageText
     leftPane:SetScript("OnMouseWheel", function(_, delta)
@@ -587,51 +642,98 @@ function Gear:Create(parent)
         Gear:RefreshSetButtons(sets)
     end)
 
-    local newButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    newButton:SetWidth(98)
+    local newButton = CreateFrame("Button", nil, leftPane, "UIPanelButtonTemplate")
+    newButton:SetWidth(152)
     newButton:SetHeight(24)
-    newButton:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 18, 13)
-    newButton:SetText("New Build")
+    newButton:SetPoint("BOTTOM", leftPane, "BOTTOM", 0, 12)
+    newButton:SetText("+  New Build")
     newButton:SetScript("OnClick", function() Gear:CreateSet() end)
     self.newButton = newButton
 
     local paperDoll = CreateFrame("Frame", nil, frame)
-    paperDoll:SetPoint("TOPLEFT", frame, "TOPLEFT", 198, -68)
-    paperDoll:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 198, 52)
-    paperDoll:SetWidth(414)
-    SetBackdrop(paperDoll, { 0.028, 0.035, 0.048, 0.98 }, { 0.15, 0.34, 0.48, 1 })
+    paperDoll:SetPoint("TOPLEFT", frame, "TOPLEFT", 202, -72)
+    paperDoll:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 202, 52)
+    paperDoll:SetWidth(430)
+    SetBackdrop(paperDoll, { 0.023, 0.032, 0.046, 0.99 }, { 0.16, 0.44, 0.64, 1 })
     self.paperDoll = paperDoll
 
-    local dollTitle = paperDoll:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    dollTitle:SetPoint("TOP", paperDoll, "TOP", 0, -17)
-    dollTitle:SetText("EQUIPMENT")
-    dollTitle:SetTextColor(0.45, 0.72, 0.92)
+    local equipmentHeader = CreateFrame("Frame", nil, paperDoll)
+    equipmentHeader:SetPoint("TOPLEFT", paperDoll, "TOPLEFT", 1, -1)
+    equipmentHeader:SetPoint("TOPRIGHT", paperDoll, "TOPRIGHT", -1, -1)
+    equipmentHeader:SetHeight(38)
+    SetBackdrop(equipmentHeader, { 0.045, 0.095, 0.135, 0.98 }, { 0.12, 0.30, 0.42, 0 })
 
-    local silhouette = paperDoll:CreateTexture(nil, "BACKGROUND")
-    silhouette:SetWidth(166)
-    silhouette:SetHeight(330)
-    silhouette:SetPoint("TOP", paperDoll, "TOP", 0, -52)
-    silhouette:SetTexture("Interface\\Buttons\\WHITE8X8")
-    silhouette:SetVertexColor(0.055, 0.075, 0.105, 0.72)
+    local dollTitle = equipmentHeader:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    dollTitle:SetPoint("CENTER", equipmentHeader, "CENTER", 0, 0)
+    dollTitle:SetText("EQUIPMENT")
+    dollTitle:SetTextColor(0.48, 0.82, 1)
+
+    local guideCard = CreateFrame("Frame", nil, paperDoll)
+    guideCard:SetWidth(184)
+    guideCard:SetHeight(310)
+    guideCard:SetPoint("TOP", paperDoll, "TOP", 0, -66)
+    SetBackdrop(guideCard, { 0.030, 0.055, 0.078, 0.96 }, { 0.14, 0.35, 0.50, 0.85 })
+
+    local guideIcon = guideCard:CreateTexture(nil, "BACKGROUND")
+    guideIcon:SetWidth(126)
+    guideIcon:SetHeight(126)
+    guideIcon:SetPoint("CENTER", guideCard, "CENTER", 0, 35)
+    guideIcon:SetTexture("Interface\\AddOns\\actually\\Textures\\TabIconGear")
+    guideIcon:SetAlpha(0.075)
+
+    local guideTitle = guideCard:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    guideTitle:SetPoint("CENTER", guideCard, "CENTER", 0, 12)
+    guideTitle:SetWidth(164)
+    guideTitle:SetJustifyH("CENTER")
+    self.slotGuideTitle = guideTitle
+
+    local guideText = guideCard:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    guideText:SetPoint("TOP", guideTitle, "BOTTOM", 0, -12)
+    guideText:SetWidth(164)
+    guideText:SetJustifyH("CENTER")
+    guideText:SetTextColor(0.62, 0.72, 0.80)
+    self.slotGuideText = guideText
+
+    local weaponBar = CreateFrame("Frame", nil, paperDoll)
+    weaponBar:SetPoint("BOTTOMLEFT", paperDoll, "BOTTOMLEFT", 84, 7)
+    weaponBar:SetPoint("BOTTOMRIGHT", paperDoll, "BOTTOMRIGHT", -84, 7)
+    weaponBar:SetHeight(76)
+    SetBackdrop(weaponBar, { 0.025, 0.045, 0.063, 0.96 }, { 0.12, 0.30, 0.42, 0.75 })
+
+    local weaponLabel = weaponBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    weaponLabel:SetPoint("TOP", weaponBar, "TOP", 0, -4)
+    weaponLabel:SetText("WEAPONS")
+    weaponLabel:SetTextColor(0.42, 0.70, 0.88)
 
     for _, slotInfo in ipairs(SLOT_LAYOUT) do
         self:CreateSlot(paperDoll, slotInfo)
     end
 
     local notesPanel = CreateFrame("Frame", nil, frame)
-    notesPanel:SetPoint("TOPLEFT", frame, "TOPLEFT", 620, -68)
+    notesPanel:SetPoint("TOPLEFT", frame, "TOPLEFT", 640, -72)
     notesPanel:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -14, 52)
-    SetBackdrop(notesPanel, { 0.03, 0.04, 0.055, 0.98 }, { 0.13, 0.32, 0.43, 1 })
+    SetBackdrop(notesPanel, { 0.026, 0.038, 0.055, 0.99 }, { 0.16, 0.42, 0.60, 1 })
     self.notesPanel = notesPanel
 
+    local detailsHeader = CreateFrame("Frame", nil, notesPanel)
+    detailsHeader:SetPoint("TOPLEFT", notesPanel, "TOPLEFT", 1, -1)
+    detailsHeader:SetPoint("TOPRIGHT", notesPanel, "TOPRIGHT", -1, -1)
+    detailsHeader:SetHeight(38)
+    SetBackdrop(detailsHeader, { 0.045, 0.095, 0.135, 0.98 }, { 0.12, 0.30, 0.42, 0 })
+
+    local detailsTitle = detailsHeader:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    detailsTitle:SetPoint("LEFT", detailsHeader, "LEFT", 10, 0)
+    detailsTitle:SetText("BUILD DETAILS")
+    detailsTitle:SetTextColor(0.48, 0.82, 1)
+
     local nameLabel = notesPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    nameLabel:SetPoint("TOPLEFT", notesPanel, "TOPLEFT", 12, -13)
+    nameLabel:SetPoint("TOPLEFT", notesPanel, "TOPLEFT", 12, -52)
     nameLabel:SetText("BUILD NAME")
 
     local nameEdit = CreateFrame("EditBox", nil, notesPanel, "InputBoxTemplate")
     nameEdit:SetWidth(292)
     nameEdit:SetHeight(25)
-    nameEdit:SetPoint("TOPLEFT", notesPanel, "TOPLEFT", 12, -34)
+    nameEdit:SetPoint("TOPLEFT", notesPanel, "TOPLEFT", 12, -72)
     nameEdit:SetAutoFocus(false)
     nameEdit:SetMaxLetters(80)
     nameEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() Gear:Refresh() end)
@@ -639,13 +741,13 @@ function Gear:Create(parent)
     self.nameEdit = nameEdit
 
     local notesLabel = notesPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    notesLabel:SetPoint("TOPLEFT", notesPanel, "TOPLEFT", 12, -73)
+    notesLabel:SetPoint("TOPLEFT", notesPanel, "TOPLEFT", 12, -112)
     notesLabel:SetText("BUILD NOTES")
 
     local noteBorder = CreateFrame("Frame", nil, notesPanel)
-    noteBorder:SetPoint("TOPLEFT", notesPanel, "TOPLEFT", 10, -94)
-    noteBorder:SetPoint("BOTTOMRIGHT", notesPanel, "BOTTOMRIGHT", -10, 49)
-    SetBackdrop(noteBorder, { 0.018, 0.024, 0.034, 1 }, { 0.12, 0.25, 0.34, 1 })
+    noteBorder:SetPoint("TOPLEFT", notesPanel, "TOPLEFT", 10, -134)
+    noteBorder:SetPoint("BOTTOMRIGHT", notesPanel, "BOTTOMRIGHT", -10, 58)
+    SetBackdrop(noteBorder, { 0.015, 0.022, 0.032, 1 }, { 0.12, 0.30, 0.42, 1 })
 
     local noteScroll = CreateFrame("ScrollFrame", nil, noteBorder, "UIPanelScrollFrameTemplate")
     noteScroll:SetPoint("TOPLEFT", noteBorder, "TOPLEFT", 8, -8)
@@ -659,7 +761,24 @@ function Gear:Create(parent)
     notesEdit:SetTextInsets(3, 3, 3, 3)
     notesEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
     notesEdit:SetScript("OnTextChanged", function(self)
-        self:SetHeight(math.max(380, self:GetStringHeight() + 18))
+        -- GetStringHeight belongs to FontString on newer clients and is not
+        -- available on Ascension's 3.3.5 EditBox. Estimate wrapped text height
+        -- from the active font and edit width so the scroll child still grows.
+        local fontHeight = 12
+        if self.GetFont then
+            local _, configuredHeight = self:GetFont()
+            fontHeight = tonumber(configuredHeight) or fontHeight
+        end
+
+        local usableWidth = math.max(1, self:GetWidth() - 6)
+        local approximateCharacterWidth = math.max(1, fontHeight * 0.55)
+        local charactersPerLine = math.max(1, math.floor(usableWidth / approximateCharacterWidth))
+        local visualLines = 0
+        local text = (self:GetText() or ""):gsub("\t", "    ")
+        for line in (text .. "\n"):gmatch("(.-)\n") do
+            visualLines = visualLines + math.max(1, math.ceil(#line / charactersPerLine))
+        end
+        self:SetHeight(math.max(380, visualLines * (fontHeight + 3) + 18))
     end)
     noteScroll:SetScrollChild(notesEdit)
     self.notesEdit = notesEdit
@@ -667,7 +786,7 @@ function Gear:Create(parent)
     local saveButton = CreateFrame("Button", nil, notesPanel, "UIPanelButtonTemplate")
     saveButton:SetWidth(100)
     saveButton:SetHeight(24)
-    saveButton:SetPoint("BOTTOMRIGHT", notesPanel, "BOTTOMRIGHT", -10, 13)
+    saveButton:SetPoint("BOTTOMRIGHT", notesPanel, "BOTTOMRIGHT", -10, 17)
     saveButton:SetText("Save Build")
     saveButton:SetScript("OnClick", function() Gear:SaveSelectedSet() end)
     self.saveButton = saveButton
@@ -680,15 +799,21 @@ function Gear:Create(parent)
     deleteButton:SetScript("OnClick", function() Gear:DeleteSelectedSet() end)
     self.deleteButton = deleteButton
 
+    local statusBar = CreateFrame("Frame", nil, frame)
+    statusBar:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 202, 12)
+    statusBar:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -14, 12)
+    statusBar:SetHeight(28)
+    SetBackdrop(statusBar, { 0.025, 0.050, 0.070, 0.98 }, { 0.12, 0.30, 0.42, 0.8 })
+
     local emptyText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
     emptyText:SetPoint("CENTER", frame, "CENTER", 95, 25)
     emptyText:SetWidth(560)
     emptyText:SetJustifyH("CENTER")
     self.emptyText = emptyText
 
-    local status = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    status:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 198, 18)
-    status:SetWidth(720)
+    local status = statusBar:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    status:SetPoint("LEFT", statusBar, "LEFT", 10, 0)
+    status:SetPoint("RIGHT", statusBar, "RIGHT", -10, 0)
     status:SetJustifyH("LEFT")
     self.statusText = status
 

@@ -68,6 +68,10 @@ local defaults = {
     sync = {
         knownPeers = {},
     },
+    assistLog = {
+        fights = {},
+        pendingUploads = {},
+    },
     discussions = {},
     gear = {
         sets = {},
@@ -181,6 +185,10 @@ local function InitializeListStorage(db)
     db.spellTombstones = type(db.spellTombstones) == "table" and db.spellTombstones or {}
     db.sync = type(db.sync) == "table" and db.sync or {}
     db.sync.knownPeers = type(db.sync.knownPeers) == "table" and db.sync.knownPeers or {}
+    db.assistLog = type(db.assistLog) == "table" and db.assistLog or {}
+    db.assistLog.fights = type(db.assistLog.fights) == "table" and db.assistLog.fights or {}
+    db.assistLog.pendingUploads = type(db.assistLog.pendingUploads) == "table"
+        and db.assistLog.pendingUploads or {}
 
     if type(db.lists.personal[Addon.DEFAULT_PERSONAL_LIST_NAME]) ~= "table" then
         db.lists.personal[Addon.DEFAULT_PERSONAL_LIST_NAME] = {
@@ -303,6 +311,9 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
     if Addon.Sync then
         Addon.Sync:Initialize()
     end
+    if Addon.RaidTargets then
+        Addon.RaidTargets:Initialize()
+    end
 
     SLASH_ACTUALLY1 = "/actually"
     SLASH_ACTUALLY2 = "/act"
@@ -336,6 +347,22 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
             Addon.Sync:SetDebug(not Addon.Sync.debugEnabled)
         elseif lowerMessage == "sync log" and Addon.Sync then
             Addon.Sync:PrintLog()
+        elseif lowerMessage == "assistlog" and Addon.AssistLogUI then
+            Addon.AssistLogUI:Show()
+        elseif string.sub(lowerMessage, 1, 10) == "assistlog " and Addon.RaidTargets then
+            if not Addon.RaidTargets:HandleCommand(string.sub(rawMessage, 11)) then
+                Addon:Print("Assist Log commands: /actually assistlog, /actually assistlog caller <raid player|target|me>")
+            end
+        elseif (lowerMessage == "caller" or lowerMessage == "shotcaller") and Addon.RaidTargets then
+            Addon.RaidTargets:HandleCommand("caller")
+        elseif string.sub(lowerMessage, 1, 7) == "caller " and Addon.RaidTargets then
+            Addon.RaidTargets:HandleCommand("caller " .. string.sub(rawMessage, 8))
+        elseif string.sub(lowerMessage, 1, 11) == "shotcaller " and Addon.RaidTargets then
+            Addon.RaidTargets:HandleCommand("caller " .. string.sub(rawMessage, 12))
+        elseif lowerMessage == "leader" and Addon.Official then
+            Addon.Official:HandleLeaderCommand("")
+        elseif string.sub(lowerMessage, 1, 7) == "leader " and Addon.Official then
+            Addon.Official:HandleLeaderCommand(string.sub(rawMessage, 8))
         elseif string.sub(lowerMessage, 1, 10) == "sync pull " and Addon.Sync then
             Addon.Sync:ForceSync(string.sub(rawMessage, 11))
         elseif Addon.Official and Addon.Official:HandleHiddenCommand(lowerMessage) then

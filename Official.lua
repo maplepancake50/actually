@@ -127,14 +127,18 @@ function Official:IsOwner()
     return owner and NormalizeIdentity(owner) == self:GetPlayerKey()
 end
 
+function Official:IsLeader()
+    return self:IsOwner()
+end
+
 function Official:SetCurrentOfficer(enabled)
     local identity = self:GetPlayerIdentity()
     local key = NormalizeIdentity(identity)
     if enabled and not Addon.db.authority.owner then
         Addon.db.authority.owner = identity
-        Addon:Print(identity .. " is now the official-list owner.")
+        Addon:Print(identity .. " is now the actually leader.")
     elseif enabled and not self:IsOwner() then
-        Addon:Print("Only " .. tostring(Addon.db.authority.owner) .. " can grant officer access.")
+        Addon:Print("Only the actually leader, " .. tostring(Addon.db.authority.owner) .. ", can grant officer access.")
         return
     end
 
@@ -172,9 +176,72 @@ function Official:SendAuthorization(action, targetKey, whisperTarget)
     return true
 end
 
+function Official:BroadcastLeader(action, identity, whisperTarget)
+    local payload = table.concat({ "AUTH", "LEADER", action, AUTH_TOKEN, identity or "" }, "|")
+    if Addon.Sync and Addon.Sync.BroadcastLive then
+        Addon.Sync:BroadcastLive(payload)
+        if whisperTarget and whisperTarget ~= "" and Addon.Sync.QueueMessage then
+            Addon.Sync:QueueMessage(payload, "WHISPER", whisperTarget)
+        end
+    elseif SendAddonMessage and whisperTarget and whisperTarget ~= "" then
+        SendAddonMessage(MESSAGE_PREFIX, payload, "WHISPER", whisperTarget)
+    end
+end
+
+function Official:SetLeader(target)
+    target = Trim(target)
+    local lowered = string.lower(target)
+    if lowered == "me" or lowered == "self" then
+        target = UnitName("player") or ""
+    elseif lowered == "target" then
+        target = UnitName("target") or ""
+    end
+    local targetKey, whisperTarget, identity = self:ResolveTarget(target)
+    if not targetKey then
+        return nil, "Usage: /actually leader <player|target|me>"
+    end
+    Addon.db.authority.owner = identity
+    Addon.db.authority.officers[targetKey] = true
+    self:BroadcastLeader("SET", identity, whisperTarget)
+    if Addon.Sync then Addon.Sync:MarkDirty(true) end
+    if Addon.Board then Addon.Board:RefreshListControls() end
+    return identity
+end
+
+function Official:ClearLeader()
+    local previous = Addon.db.authority.owner
+    Addon.db.authority.owner = nil
+    self:BroadcastLeader("CLEAR", "")
+    if Addon.Sync then Addon.Sync:MarkDirty(true) end
+    if Addon.Board then Addon.Board:RefreshListControls() end
+    return previous
+end
+
+function Official:HandleLeaderCommand(arguments)
+    local value = Trim(arguments)
+    local lowered = string.lower(value)
+    if value == "" then
+        Addon:Print("Actually leader: " .. tostring(Addon.db.authority.owner or "none")
+            .. ". Use /actually leader <player> or /actually leader clear.")
+        return true
+    elseif lowered == "clear" or lowered == "none" or lowered == "reset" then
+        local previous = self:ClearLeader()
+        Addon:Print(previous and ("Actually leader cleared (was " .. tostring(previous) .. ").")
+            or "Actually leader is already clear.")
+        return true
+    end
+    local identity, errorMessage = self:SetLeader(value)
+    if identity then
+        Addon:Print(identity .. " is now the actually leader.")
+    else
+        Addon:Print(errorMessage)
+    end
+    return true
+end
+
 function Official:GrantOfficer(target)
     if not self:IsOwner() then
-        Addon:Print("Only the official-list owner can grant officer access.")
+        Addon:Print("Only the actually leader can grant officer access.")
         return false
     end
 
@@ -196,7 +263,7 @@ end
 
 function Official:RevokeOfficer(target)
     if not self:IsOwner() then
-        Addon:Print("Only the official-list owner can revoke officer access.")
+        Addon:Print("Only the actually leader can revoke officer access.")
         return false
     end
 
@@ -437,6 +504,21 @@ function Official:ReceiveAuthorization(message, sender)
     end
 end
 
+function Official:ReceiveLeader(message)
+    local action, token, identity = string.match(message or "", "^AUTH|LEADER|([^|]+)|([^|]+)|(.*)$")
+    if token ~= AUTH_TOKEN then return end
+    if action == "CLEAR" then
+        Addon.db.authority.owner = nil
+    elseif action == "SET" and identity ~= "" then
+        local key = NormalizeIdentity(identity)
+        Addon.db.authority.owner = identity
+        Addon.db.authority.officers[key] = true
+    else
+        return
+    end
+    if Addon.Board then Addon.Board:RefreshListControls() end
+end
+
 if RegisterAddonMessagePrefix then
     RegisterAddonMessagePrefix(MESSAGE_PREFIX)
 end
@@ -444,7 +526,10 @@ end
 local messageFrame = CreateFrame("Frame")
 messageFrame:RegisterEvent("CHAT_MSG_ADDON")
 messageFrame:SetScript("OnEvent", function(_, event, prefix, message, channel, sender)
-    if event == "CHAT_MSG_ADDON" and prefix == MESSAGE_PREFIX and channel == "WHISPER" then
+    if event ~= "CHAT_MSG_ADDON" or prefix ~= MESSAGE_PREFIX then return end
+    if string.find(message or "", "^AUTH|LEADER|") and (channel == "GUILD" or channel == "WHISPER") then
+        Official:ReceiveLeader(message, sender)
+    elseif channel == "WHISPER" then
         Official:ReceiveAuthorization(message, sender)
     end
 end)

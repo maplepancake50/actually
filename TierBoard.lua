@@ -30,6 +30,12 @@ local ROW_WIDTH = 928
 local RANKED_VIEW_HEIGHT = 382
 local POOL_ROW_HEIGHT = 124
 local RANKED_TIERS = { "S", "A", "B", "C", "D" }
+local NAV_RAIL_WIDTH = 952
+local NAV_RAIL_PADDING = 8
+local NAV_TAB_GAP = 8
+local NAV_TAB_WIDTH = (NAV_RAIL_WIDTH - NAV_RAIL_PADDING * 2 - NAV_TAB_GAP * 3) / 4
+local NAV_TAB_HEIGHT = 56
+local NAV_TAB_Y = 6
 local NAV_SECTIONS = {
     {
         key = "tier",
@@ -95,9 +101,9 @@ function Board:RefreshSectionTabs()
         local green = math.min(1, section.color[2] + (active and 0.13 or 0))
         local blue = math.min(1, section.color[3] + (active and 0.13 or 0))
         tab:ClearAllPoints()
-        tab:SetWidth(228)
-        tab:SetHeight(56)
-        tab:SetPoint("BOTTOMLEFT", self.sectionRail, "BOTTOMLEFT", tab.offsetX, 5)
+        tab:SetWidth(NAV_TAB_WIDTH)
+        tab:SetHeight(NAV_TAB_HEIGHT)
+        tab:SetPoint("BOTTOMLEFT", self.sectionRail, "BOTTOMLEFT", tab.offsetX, NAV_TAB_Y)
         tab:SetBackdropColor(red, green, blue, 0.98)
         tab:SetBackdropBorderColor(
             section.border[1],
@@ -135,7 +141,22 @@ function Board:SetSection(sectionKey)
     -- Some 3.3.5 UI skins detach InputBox/dropdown artwork from the filter
     -- bar's inherited visibility. Toggle the controls themselves as well.
     for _, widget in ipairs(self.filterControls or {}) do
+        widget:SetAlpha(showTier and 1 or 0)
         if showTier then widget:Show() else widget:Hide() end
+    end
+    if self.filterBar then
+        self.filterBar:SetAlpha(showTier and 1 or 0)
+        -- Older UI skins can reparent InputBoxTemplate border artwork so it
+        -- ignores both Hide() and parent alpha. Moving the complete filter
+        -- group off-screen is the only reliable way to suppress that orphaned
+        -- border on Gear and the other non-tier sections.
+        self.filterBar:ClearAllPoints()
+        if showTier then
+            self.filterBar:SetPoint("TOPLEFT", self.frame, "TOPLEFT", 80, -77)
+            self.filterBar:SetPoint("TOPRIGHT", self.frame, "TOPRIGHT", -16, -77)
+        else
+            self.filterBar:SetPoint("TOPLEFT", self.frame, "TOPLEFT", -4000, 4000)
+        end
     end
     if showTier then
         self:RefreshListControls()
@@ -200,7 +221,7 @@ function Board:CreateSectionNavigation(closeButton)
     self.sectionPanel = panel
 
     local rail = CreateFrame("Frame", nil, frame)
-    rail:SetWidth(952)
+    rail:SetWidth(NAV_RAIL_WIDTH)
     rail:SetHeight(68)
     rail:SetPoint("BOTTOM", frame, "BOTTOM", 0, 8)
     rail:SetFrameLevel(frame:GetFrameLevel() + 24)
@@ -226,10 +247,10 @@ function Board:CreateSectionNavigation(closeButton)
     for index, section in ipairs(NAV_SECTIONS) do
         local sectionInfo = section
         local tab = CreateFrame("Button", nil, rail)
-        tab:SetWidth(228)
-        tab:SetHeight(56)
+        tab:SetWidth(NAV_TAB_WIDTH)
+        tab:SetHeight(NAV_TAB_HEIGHT)
         tab:SetFrameLevel(frame:GetFrameLevel() + 30)
-        tab.offsetX = 8 + (index - 1) * 234
+        tab.offsetX = NAV_RAIL_PADDING + (index - 1) * (NAV_TAB_WIDTH + NAV_TAB_GAP)
         SetBackdrop(tab, { sectionInfo.color[1], sectionInfo.color[2], sectionInfo.color[3], 0.98 }, sectionInfo.border)
 
         local spine = tab:CreateTexture(nil, "BACKGROUND")
@@ -1149,7 +1170,7 @@ end
 
 function Board:CreateFilterBar()
     local bar = CreateFrame("Frame", nil, self.frame)
-    bar:SetPoint("TOPLEFT", self.frame, "TOPLEFT", 16, -77)
+    bar:SetPoint("TOPLEFT", self.frame, "TOPLEFT", 80, -77)
     bar:SetPoint("TOPRIGHT", self.frame, "TOPRIGHT", -16, -77)
     bar:SetHeight(25)
     self.filterBar = bar
@@ -1159,7 +1180,7 @@ function Board:CreateFilterBar()
     searchLabel:SetText("Search")
 
     local searchBox = CreateFrame("EditBox", nil, bar, "InputBoxTemplate")
-    searchBox:SetWidth(190)
+    searchBox:SetWidth(170)
     searchBox:SetHeight(22)
     searchBox:SetPoint("LEFT", searchLabel, "RIGHT", 11, 0)
     searchBox:SetAutoFocus(false)
@@ -1556,7 +1577,8 @@ function Board:RefreshListControls()
         local official = Addon.db.lists.official
         local revision = tonumber(official.revision) or 0
         local mode = isOfficer and "|cff77dd77OFFICER EDIT|r" or "|cffaaaaaaread-only|r"
-        local lastEditor = official.lastModifiedBy and ("  |cffaaaaaaby " .. official.lastModifiedBy .. "|r") or ""
+        local editorName = official.lastModifiedBy and Addon.Util.ShortName(official.lastModifiedBy)
+        local lastEditor = editorName and ("  |cffaaaaaaby " .. editorName .. "|r") or ""
         self.listSubtitle:SetText(mode .. "  Rev " .. revision .. lastEditor)
         if isOfficer then
             self.resetButton:Enable()
@@ -2109,27 +2131,31 @@ function Board:Create()
 
     if Addon.Analyzer then
         Addon.Analyzer:Create(frame)
+        if Addon.Analyzer.launchButton then
+            Addon.Analyzer.launchButton:ClearAllPoints()
+            Addon.Analyzer.launchButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 700, -20)
+        end
     end
 
     local headerBadge = CreateFrame("Frame", nil, frame)
-    headerBadge:SetWidth(64)
-    headerBadge:SetHeight(64)
-    headerBadge:SetPoint("TOPLEFT", frame, "TOPLEFT", 9, -5)
+    headerBadge:SetWidth(58)
+    headerBadge:SetHeight(58)
+    headerBadge:SetPoint("TOPLEFT", frame, "TOPLEFT", 14, -9)
 
     local badgeIcon = headerBadge:CreateTexture(nil, "ARTWORK")
-    badgeIcon:SetWidth(60)
-    badgeIcon:SetHeight(60)
+    badgeIcon:SetWidth(54)
+    badgeIcon:SetHeight(54)
     badgeIcon:SetPoint("CENTER")
     badgeIcon:SetTexture("Interface\\AddOns\\actually\\Textures\\NerdFace")
     badgeIcon:SetTexCoord(0, 1, 0, 1)
 
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOPLEFT", frame, "TOPLEFT", 80, -24)
+    title:SetPoint("TOPLEFT", frame, "TOPLEFT", 80, -17)
     title:SetText("Cache Ability Tier List")
 
     local subtitle = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    subtitle:SetPoint("TOPLEFT", frame, "TOPLEFT", 80, -47)
-    subtitle:SetWidth(275)
+    subtitle:SetPoint("TOPLEFT", frame, "TOPLEFT", 80, -42)
+    subtitle:SetWidth(245)
     subtitle:SetHeight(16)
     subtitle:SetJustifyH("LEFT")
     self.listSubtitle = subtitle
@@ -2167,9 +2193,9 @@ function Board:Create()
     self.batchCaptureButton = batchCapture
 
     local auditButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    auditButton:SetWidth(95)
+    auditButton:SetWidth(100)
     auditButton:SetHeight(22)
-    auditButton:SetPoint("TOPRIGHT", close, "TOPLEFT", -4, -2)
+    auditButton:SetPoint("TOPLEFT", frame, "TOPLEFT", 835, -22)
     auditButton:SetText("Audit Log (0)")
     auditButton:SetScript("OnClick", function()
         Board:ShowAuditLog()
@@ -2177,17 +2203,19 @@ function Board:Create()
     self.auditButton = auditButton
 
     local officialBadge = CreateFrame("Frame", nil, frame)
-    officialBadge:SetWidth(190)
-    officialBadge:SetHeight(36)
-    officialBadge:SetPoint("TOPLEFT", frame, "TOPLEFT", 365, -30)
+    officialBadge:SetWidth(210)
+    officialBadge:SetHeight(38)
+    officialBadge:SetPoint("TOPLEFT", frame, "TOPLEFT", 335, -14)
     SetBackdrop(officialBadge, { 0.16, 0.105, 0.025, 0.98 }, { 1.00, 0.76, 0.18, 1 })
     self.officialBadge = officialBadge
 
     local discussionHint = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    discussionHint:SetPoint("LEFT", officialBadge, "RIGHT", 14, 0)
-    discussionHint:SetWidth(350)
+    discussionHint:SetPoint("TOPLEFT", frame, "TOPLEFT", 560, -18)
+    discussionHint:SetWidth(125)
+    discussionHint:SetHeight(34)
     discussionHint:SetJustifyH("LEFT")
-    discussionHint:SetText("Right click spell for Discussion")
+    discussionHint:SetJustifyV("MIDDLE")
+    discussionHint:SetText("Right-click a spell\nfor Discussion")
     discussionHint:SetTextColor(1, 0.78, 0.22)
 
     local crownGlow = officialBadge:CreateTexture(nil, "BACKGROUND")
@@ -2205,7 +2233,7 @@ function Board:Create()
     crown:SetTexture("Interface\\GroupFrame\\UI-Group-LeaderIcon")
 
     local officialList = CreateFrame("Button", nil, officialBadge, "UIPanelButtonTemplate")
-    officialList:SetWidth(150)
+    officialList:SetWidth(168)
     officialList:SetHeight(26)
     officialList:SetPoint("RIGHT", officialBadge, "RIGHT", -5, 0)
     officialList:SetText("OFFICIAL TIER LIST")
@@ -2237,6 +2265,13 @@ function Board:Create()
         crownGlow:SetAlpha(1)
         GameTooltip:Hide()
     end)
+
+    local headerDivider = frame:CreateTexture(nil, "BACKGROUND")
+    headerDivider:SetPoint("TOPLEFT", frame, "TOPLEFT", 80, -67)
+    headerDivider:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -16, -67)
+    headerDivider:SetHeight(1)
+    headerDivider:SetTexture("Interface\\Buttons\\WHITE8X8")
+    headerDivider:SetVertexColor(0.20, 0.55, 0.75, 0.34)
 
     local footer = CreateFrame("Frame", nil, frame)
     footer:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 12, 80)
@@ -2327,7 +2362,7 @@ function Board:Create()
     self:CreateSpellEditor()
     self.tierSectionWidgets = {
         headerBadge, title, subtitle, reset, addSpell, batchCapture, auditButton,
-        officialBadge, discussionHint, footer, self.filterBar, self.rankedArea.viewport,
+        officialBadge, discussionHint, headerDivider, footer, self.filterBar, self.rankedArea.viewport,
         self.rankedArea.bar, self.rows.U,
     }
     if Addon.Analyzer and Addon.Analyzer.launchButton then
