@@ -72,6 +72,9 @@ local defaults = {
         fights = {},
         pendingUploads = {},
     },
+    backups = {
+        snapshots = {},
+    },
     discussions = {},
     gear = {
         sets = {},
@@ -189,6 +192,8 @@ local function InitializeListStorage(db)
     db.assistLog.fights = type(db.assistLog.fights) == "table" and db.assistLog.fights or {}
     db.assistLog.pendingUploads = type(db.assistLog.pendingUploads) == "table"
         and db.assistLog.pendingUploads or {}
+    db.backups = type(db.backups) == "table" and db.backups or {}
+    db.backups.snapshots = type(db.backups.snapshots) == "table" and db.backups.snapshots or {}
 
     if type(db.lists.personal[Addon.DEFAULT_PERSONAL_LIST_NAME]) ~= "table" then
         db.lists.personal[Addon.DEFAULT_PERSONAL_LIST_NAME] = {
@@ -311,6 +316,9 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
     if Addon.Sync then
         Addon.Sync:Initialize()
     end
+    if Addon.Backups then
+        Addon.Backups:Initialize()
+    end
     if Addon.RaidTargets then
         Addon.RaidTargets:Initialize()
     end
@@ -347,6 +355,10 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
             Addon.Sync:SetDebug(not Addon.Sync.debugEnabled)
         elseif lowerMessage == "sync log" and Addon.Sync then
             Addon.Sync:PrintLog()
+        elseif (lowerMessage == "backup" or lowerMessage == "backups") and Addon.Backups then
+            Addon.Backups:HandleCommand("")
+        elseif string.sub(lowerMessage, 1, 7) == "backup " and Addon.Backups then
+            Addon.Backups:HandleCommand(string.sub(rawMessage, 8))
         elseif lowerMessage == "assistlog" and Addon.AssistLogUI then
             Addon.AssistLogUI:Show()
         elseif string.sub(lowerMessage, 1, 10) == "assistlog " and Addon.RaidTargets then

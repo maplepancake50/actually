@@ -12,6 +12,7 @@ TierBoard.lua
 BatchCapture.lua
 Gear.lua
 Sync.lua
+Backups.lua
 RaidTargets.lua
 AssistLogUI.lua
 MinimapButton.lua

@@ -26,9 +26,9 @@ local SLOT_LAYOUT = {
     { key = "trinket1", label = "Trinket 1", inventory = "Trinket0Slot", x = 364, y = -356, side = "right" },
     { key = "trinket2", label = "Trinket 2", inventory = "Trinket1Slot", x = 364, y = -405, side = "right" },
 
-    { key = "mainhand", label = "Main Hand", inventory = "MainHandSlot", x = 116, side = "bottom" },
-    { key = "offhand", label = "Off Hand", inventory = "SecondaryHandSlot", x = 184, side = "bottom" },
-    { key = "ranged", label = "Ranged / Relic", inventory = "RangedSlot", x = 252, side = "bottom" },
+    { key = "mainhand", label = "Main Hand", inventory = "MainHandSlot", x = 96, side = "bottom" },
+    { key = "offhand", label = "Off Hand", inventory = "SecondaryHandSlot", x = 194, side = "bottom" },
+    { key = "ranged", label = "Ranged / Relic", inventory = "RangedSlot", x = 294, side = "bottom" },
 }
 
 local function Now()
@@ -486,7 +486,7 @@ function Gear:CreateSlot(parent, slotInfo)
     button:SetWidth(42)
     button:SetHeight(42)
     if slotInfo.side == "bottom" then
-        button:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", slotInfo.x, 20)
+        button:SetPoint("BOTTOMLEFT", parent, "BOTTOMLEFT", slotInfo.x, 28)
     else
         button:SetPoint("TOPLEFT", parent, "TOPLEFT", slotInfo.x, slotInfo.y)
     end
@@ -511,7 +511,7 @@ function Gear:CreateSlot(parent, slotInfo)
     selection:Hide()
     button.selection = selection
 
-    local label = parent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    local label = button:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     if slotInfo.side == "left" then
         label:SetPoint("LEFT", button, "RIGHT", 5, 0)
         label:SetJustifyH("LEFT")
@@ -520,6 +520,8 @@ function Gear:CreateSlot(parent, slotInfo)
         label:SetJustifyH("RIGHT")
     else
         label:SetPoint("TOP", button, "BOTTOM", 0, -2)
+        label:SetWidth(92)
+        label:SetHeight(14)
         label:SetJustifyH("CENTER")
     end
     label:SetText(slotInfo.label)
@@ -695,9 +697,9 @@ function Gear:Create(parent)
     self.slotGuideText = guideText
 
     local weaponBar = CreateFrame("Frame", nil, paperDoll)
-    weaponBar:SetPoint("BOTTOMLEFT", paperDoll, "BOTTOMLEFT", 84, 7)
-    weaponBar:SetPoint("BOTTOMRIGHT", paperDoll, "BOTTOMRIGHT", -84, 7)
-    weaponBar:SetHeight(76)
+    weaponBar:SetPoint("BOTTOMLEFT", paperDoll, "BOTTOMLEFT", 68, 7)
+    weaponBar:SetPoint("BOTTOMRIGHT", paperDoll, "BOTTOMRIGHT", -68, 7)
+    weaponBar:SetHeight(88)
     SetBackdrop(weaponBar, { 0.025, 0.045, 0.063, 0.96 }, { 0.12, 0.30, 0.42, 0.75 })
 
     local weaponLabel = weaponBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
