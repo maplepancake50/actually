@@ -15,6 +15,7 @@ Sync.lua
 Backups.lua
 RaidTargets.lua
 CallerArrow.lua
+FapAlert.lua
 CacheTips.lua
 AssistLogUI.lua
 FocusAssignments.lua

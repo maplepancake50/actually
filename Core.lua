@@ -347,6 +347,9 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
     if Addon.CallerArrow then
         Addon.CallerArrow:Initialize()
     end
+    if Addon.FapAlert then
+        Addon.FapAlert:Initialize()
+    end
     if Addon.CacheTips then
         Addon.CacheTips:Create()
     end
@@ -378,6 +381,8 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
         elseif lowerMessage == "pet sad" then
             Addon.Pet:Show()
             Addon.Pet:Play("sad")
+        elseif lowerMessage == "fap" and Addon.FapAlert then
+            Addon.FapAlert:Trigger()
         elseif lowerMessage == "sync" and Addon.Sync then
             Addon.Sync:PrintStatus(false)
         elseif lowerMessage == "sync now" and Addon.Sync then
