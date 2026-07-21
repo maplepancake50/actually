@@ -6,7 +6,7 @@ local Util = Addon.Util or {}
 Addon.Util = Util
 
 Addon.name = addonName or "actually"
-Addon.version = "0.2.0"
+Addon.version = "0.2.3"
 Addon.MESSAGE_PREFIX = "ACTUALLY"
 Addon.tierOrder = { "S", "A", "B", "C", "D", "U" }
 Addon.DEFAULT_PERSONAL_LIST_NAME = "My Tier List"
@@ -74,6 +74,16 @@ local defaults = {
         pendingUploads = {},
         activeParticipantRuns = {},
         deletedFights = {},
+    },
+    callerArrow = {
+        enabled = false,
+        x = 0,
+        y = -145,
+    },
+    cacheTips = {
+        healer = "",
+        dps = "",
+        frontline = "",
     },
     backups = {
         snapshots = {},
@@ -328,6 +338,12 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
     end
     if Addon.RaidTargets then
         Addon.RaidTargets:Initialize()
+    end
+    if Addon.CallerArrow then
+        Addon.CallerArrow:Initialize()
+    end
+    if Addon.CacheTips then
+        Addon.CacheTips:Create()
     end
 
     SLASH_ACTUALLY1 = "/actually"

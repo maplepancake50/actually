@@ -61,10 +61,10 @@ local NAV_SECTIONS = {
     },
     {
         key = "leveling",
-        label = "LEVELING",
-        title = "Levelling Specs",
-        icon = "Interface\\AddOns\\actually\\Textures\\TabIconLeveling",
-        description = "Level-by-level specialisation routes and milestone notes will live here.",
+        label = "WILDCARD\nPROGRESSION",
+        title = "Wildcard Progression",
+        icon = "Interface\\AddOns\\actually\\Textures\\TabIconWildcard",
+        description = "Advice for progressing your build on Wildcard",
         color = { 0.16, 0.50, 0.18 },
         border = { 0.58, 1.00, 0.30 },
     },
@@ -230,14 +230,29 @@ function Board:SetSection(sectionKey)
     if Addon.AssistLogUI then
         Addon.AssistLogUI:SetVisible(selected.key == "assist")
     end
+    if Addon.CacheTips then
+        Addon.CacheTips:SetVisible(selected.key == "cache")
+    end
     if selected.key == "tier" then
         self.sectionPanel:Hide()
     elseif selected.key == "gear" or selected.key == "assist" then
         self.sectionPanel:Hide()
     else
-        self.sectionPanel.icon:SetTexture(selected.icon)
-        self.sectionPanel.title:SetText(selected.title)
-        self.sectionPanel.description:SetText(selected.description)
+        local showPlaceholder = selected.key ~= "cache"
+        if showPlaceholder then
+            self.sectionPanel.icon:SetTexture(selected.icon)
+            self.sectionPanel.title:SetText(selected.title)
+            self.sectionPanel.description:SetText(selected.description)
+            self.sectionPanel.icon:Show()
+            self.sectionPanel.title:Show()
+            self.sectionPanel.description:Show()
+            if self.sectionPanel.hint then self.sectionPanel.hint:Show() end
+        else
+            self.sectionPanel.icon:Hide()
+            self.sectionPanel.title:Hide()
+            self.sectionPanel.description:Hide()
+            if self.sectionPanel.hint then self.sectionPanel.hint:Hide() end
+        end
         self.sectionPanel:SetBackdropBorderColor(
             selected.border[1], selected.border[2], selected.border[3], 1
         )
@@ -279,6 +294,7 @@ function Board:CreateSectionNavigation(closeButton)
     hint:SetPoint("TOP", description, "BOTTOM", 0, -20)
     hint:SetText("Section ready for content")
     hint:SetTextColor(0.52, 0.62, 0.72)
+    panel.hint = hint
 
     self.sectionPanel = panel
 

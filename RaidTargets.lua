@@ -451,6 +451,9 @@ function RaidTargets:SetSelectedCaller(specification)
         return nil, tostring(value) .. " is not in your current raid."
     end
     Addon.db.assistLog.selectedCaller = member
+    if Addon.CallerArrow and Addon.CallerArrow.AssignTarget then
+        Addon.CallerArrow:AssignTarget(member)
+    end
     self:NotifyChanged()
     return member
 end
