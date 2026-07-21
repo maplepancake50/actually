@@ -37,7 +37,7 @@ function MinimapButton:Create()
     button:SetFrameStrata("MEDIUM")
     button:SetFrameLevel(Minimap:GetFrameLevel() + 8)
     button:EnableMouse(true)
-    button:RegisterForClicks("LeftButtonUp")
+    button:RegisterForClicks("LeftButtonUp", "RightButtonUp")
     button:RegisterForDrag("LeftButton")
 
     local icon = button:CreateTexture(nil, "BACKGROUND")
@@ -63,6 +63,8 @@ function MinimapButton:Create()
     button:SetScript("OnClick", function(self, mouseButton)
         if mouseButton == "LeftButton" then
             Addon:Toggle()
+        elseif mouseButton == "RightButton" and Addon.Pet then
+            Addon.Pet:Toggle()
         end
     end)
 
@@ -82,6 +84,7 @@ function MinimapButton:Create()
         GameTooltip:SetOwner(self, "ANCHOR_LEFT")
         GameTooltip:SetText("actually", 1, 0.82, 0)
         GameTooltip:AddLine("Left-click to open or close.", 1, 1, 1)
+        GameTooltip:AddLine("Right-click to show or hide Arnold.", 0.35, 0.8, 1)
         GameTooltip:AddLine("Drag to move around the minimap.", 0.55, 0.9, 0.55)
         GameTooltip:AddLine("Commands: /actually or /act", 0.55, 0.75, 1)
         GameTooltip:Show()

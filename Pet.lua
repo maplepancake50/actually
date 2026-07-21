@@ -15,6 +15,7 @@ local TYPING_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetTyping"
 local THOUGHT_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetThoughts"
 local CROW_LAUNCH_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetCrowLaunch"
 local LEVITATE_CLOUD_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetLevitateCloud"
+local MERCENARY_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetMercenary"
 local SPEECH_BUBBLE_TEXTURE = "Interface\\AddOns\\actually\\Textures\\ActuallyPetSpeechBubble"
 local ACTION_BOX_TEXTURE = "Interface\\AddOns\\actually\\Textures\\ActuallyPetActionBox"
 local GHOST_AURA_TEXTURE = "Interface\\AddOns\\actually\\Textures\\ActuallyPetGhostAura"
@@ -22,6 +23,10 @@ local RAPID_CLICK_COUNT = 5
 local RAPID_CLICK_WINDOW = 1.75
 local CROW_RETURN_DELAY = 6
 local CROW_EFFECT_TIME_SCALE = 1.3
+local CLICK_CHATTER_COOLDOWN = 2
+local IDLE_SLEEP_DELAY = 60
+local MERCENARY_SPELL_ID = 9930874
+local MERCENARY_SPELL_NAME = "mercenaryforhire"
 -- Showcase the detailed equipment/spell poses long enough to read clearly.
 local INSPECT_DURATION_SCALE = 3.75
 
@@ -41,6 +46,17 @@ local ANIMATIONS = {
     sleepy = {
         frames = { 15, 16, 15, 16, 15, 1 },
         durations = { 0.45, 0.50, 0.45, 0.50, 0.35, 0.10 },
+    },
+    snoring = {
+        frames = { 15, 16, 15, 16 },
+        durations = { 0.62, 0.74, 0.66, 0.78 },
+        loop = true,
+    },
+    mercenaryCast = {
+        sheet = "mercenary",
+        frames = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 },
+        durations = { 0.12, 0.12, 0.11, 0.11, 0.10, 0.10, 0.10, 0.13, 0.12, 0.12, 0.13, 0.14, 0.12, 0.12, 0.12, 0.12 },
+        loop = true,
     },
     doubleBlink = {
         frames = { 5, 6, 7, 8, 5, 6, 7, 8 },
@@ -186,6 +202,7 @@ local CHATTER = {
     "shotcalling lowers my dps by 50%",
     "No, I never used that buff at cache",
     "Everyone in my guild is s++ tier",
+    "core v core we can't lose",
 }
 
 local DRAG_CHATTER = {
@@ -248,10 +265,6 @@ local function RandomSneezeDelay()
     return 42 + math.random() * 34
 end
 
-local function RandomSleepDelay()
-    return 75 + math.random() * 45
-end
-
 local function RandomEmoteDelay()
     return 16 + math.random() * 18
 end
@@ -262,6 +275,26 @@ end
 
 local function RandomThoughtDelay()
     return 26.6 + math.random() * 21
+end
+
+local function NormalizeSpellName(name)
+    return string.lower(tostring(name or "")):gsub("[^%w]", "")
+end
+
+local function IsMercenarySpell(spellName, spellID)
+    return tonumber(spellID) == MERCENARY_SPELL_ID
+        or NormalizeSpellName(spellName) == MERCENARY_SPELL_NAME
+end
+
+local function EventIsMercenarySpell(...)
+    for index = 1, select("#", ...) do
+        local value = select(index, ...)
+        if tonumber(value) == MERCENARY_SPELL_ID
+            or (type(value) == "string" and NormalizeSpellName(value) == MERCENARY_SPELL_NAME) then
+            return true
+        end
+    end
+    return false
 end
 
 function Pet:SetSpriteFrame(frameNumber)
@@ -289,6 +322,67 @@ function Pet:SetGhostAuraFrame(frameNumber)
     local column = zeroIndex % 2
     local row = math.floor(zeroIndex / 2)
     self.ghostAuraTexture:SetTexCoord(column / 2, (column + 1) / 2, row / 2, (row + 1) / 2)
+end
+
+function Pet:IsPlayerCastingMercenary()
+    if UnitCastingInfo then
+        local spellName, _, _, _, _, _, _, _, spellID = UnitCastingInfo("player")
+        if IsMercenarySpell(spellName, spellID) then
+            return true
+        end
+    end
+    if UnitChannelInfo then
+        local spellName, _, _, _, _, _, _, spellID = UnitChannelInfo("player")
+        if IsMercenarySpell(spellName, spellID) then
+            return true
+        end
+    end
+    return false
+end
+
+function Pet:StartMercenaryCast()
+    if self.isMercenaryCasting then
+        return
+    end
+
+    self.isMercenaryCasting = true
+    self:CancelCrowLaunch()
+    self:WakeFromIdle()
+    self:HideBubble()
+    self:HideThought(true)
+    self:Play("mercenaryCast")
+end
+
+function Pet:StopMercenaryCast()
+    if not self.isMercenaryCasting then
+        return
+    end
+
+    self.isMercenaryCasting = false
+    if self.animationName == "mercenaryCast" then
+        self:FinishAnimation()
+    end
+    self:ResetTimers()
+end
+
+function Pet:HandleSpellcastEvent(event, unit, ...)
+    if unit ~= "player" then
+        return
+    end
+
+    self:MarkPlayerActivity()
+
+    if event == "UNIT_SPELLCAST_START" or event == "UNIT_SPELLCAST_CHANNEL_START" then
+        if EventIsMercenarySpell(...) or self:IsPlayerCastingMercenary() then
+            self:StartMercenaryCast()
+        end
+    elseif event == "UNIT_SPELLCAST_STOP"
+        or event == "UNIT_SPELLCAST_FAILED"
+        or event == "UNIT_SPELLCAST_INTERRUPTED"
+        or event == "UNIT_SPELLCAST_SUCCEEDED"
+        or event == "UNIT_SPELLCAST_CHANNEL_STOP" then
+        self:StopMercenaryCast()
+    end
 end
 
 function Pet:SetGhostState(isGhost)
@@ -341,6 +435,8 @@ function Pet:SetSheet(sheet)
         self.texture:SetTexture(ACTIVITY_SHEET)
     elseif sheet == "typing" then
         self.texture:SetTexture(TYPING_SHEET)
+    elseif sheet == "mercenary" then
+        self.texture:SetTexture(MERCENARY_SHEET)
     else
         self.texture:SetTexture(MAIN_SHEET)
     end
@@ -365,6 +461,9 @@ local function IsPlayerTyping()
 end
 
 function Pet:UpdateTypingGaze(elapsed)
+    if self.isMercenaryCasting then
+        return
+    end
     self.typingCheckTimer = (self.typingCheckTimer or 0) - elapsed
     if self.typingCheckTimer > 0 then
         return
@@ -389,10 +488,10 @@ end
 function Pet:ResetTimers()
     self.blinkTimer = RandomBlinkDelay()
     self.sneezeTimer = RandomSneezeDelay()
-    self.sleepTimer = RandomSleepDelay()
     self.emoteTimer = RandomEmoteDelay()
     self.activityTimer = RandomActivityDelay()
     self.thoughtTimer = RandomThoughtDelay()
+    self.idleSleepTimer = IDLE_SLEEP_DELAY
 end
 
 function Pet:SetCrowLaunchFrame(frameNumber)
@@ -633,6 +732,15 @@ function Pet:CanAcceptLeftClick()
     return not self.animationName or LEFT_CLICK_SAFE_ANIMATIONS[self.animationName] == true
 end
 
+function Pet:CanShowClickChatter()
+    local now = GetTime()
+    if self.lastClickChatterAt and now - self.lastClickChatterAt < CLICK_CHATTER_COOLDOWN then
+        return false
+    end
+    self.lastClickChatterAt = now
+    return true
+end
+
 function Pet:GetNextChatter()
     self.chatterHistory = self.chatterHistory or {}
     local recent = {}
@@ -679,10 +787,143 @@ function Pet:PlayDragReleaseAnimation()
     self:Play(animationName)
 end
 
+function Pet:HideSnoreEffect()
+    if self.snoreFrame then
+        self.snoreFrame:Hide()
+    end
+end
+
+function Pet:WakeFromIdle()
+    self.idleSleepTimer = IDLE_SLEEP_DELAY
+    if not self.isIdleSleeping then
+        return
+    end
+
+    self.isIdleSleeping = false
+    self:HideSnoreEffect()
+    if self.animationName == "snoring" then
+        self:FinishAnimation()
+    end
+end
+
+function Pet:BeginIdleSleep()
+    if self.isIdleSleeping or self.animation or self.isDragging or self.isWatchingChat or self.crowLaunch then
+        return false
+    end
+    if Addon.Analyzer and Addon.Analyzer.running then
+        return false
+    end
+
+    self.isIdleSleeping = true
+    self.snoreClock = 0
+    self:HideBubble()
+    self:HideThought(true)
+    self:Play("snoring")
+    if self.snoreFrame then
+        self.snoreFrame:Show()
+    end
+    return true
+end
+
+function Pet:UpdateSnoreEffect(elapsed)
+    if not self.isIdleSleeping or not self.snoreLetters then
+        return
+    end
+
+    self.snoreClock = (self.snoreClock or 0) + elapsed
+    for index, letter in ipairs(self.snoreLetters) do
+        local phase = ((self.snoreClock - (index - 1) * 0.46) % 1.85) / 1.85
+        letter:ClearAllPoints()
+        letter:SetPoint("BOTTOMLEFT", self.snoreFrame, "BOTTOMLEFT", 4 + phase * 24, phase * 42)
+        letter:SetAlpha(math.sin(phase * math.pi))
+    end
+end
+
+function Pet:MarkPlayerActivity()
+    self.idleSleepTimer = IDLE_SLEEP_DELAY
+    self:WakeFromIdle()
+end
+
+function Pet:HasPlayerActivity()
+    local active = self.isDragging or self.isWatchingChat
+
+    if GetCursorPosition then
+        local cursorX, cursorY = GetCursorPosition()
+        if self.lastCursorX and self.lastCursorY
+            and (math.abs(cursorX - self.lastCursorX) > 0.5 or math.abs(cursorY - self.lastCursorY) > 0.5) then
+            active = true
+        end
+        self.lastCursorX = cursorX
+        self.lastCursorY = cursorY
+    end
+
+    if IsMouseButtonDown
+        and (IsMouseButtonDown("LeftButton")
+            or IsMouseButtonDown("RightButton")
+            or IsMouseButtonDown("MiddleButton")) then
+        active = true
+    end
+
+    if GetUnitSpeed and (tonumber(GetUnitSpeed("player")) or 0) > 0 then
+        active = true
+    end
+
+    if GetPlayerFacing then
+        local facing = GetPlayerFacing()
+        if facing and self.lastPlayerFacing then
+            local difference = math.abs(facing - self.lastPlayerFacing)
+            difference = math.min(difference, math.pi * 2 - difference)
+            if difference > 0.002 then
+                active = true
+            end
+        end
+        self.lastPlayerFacing = facing
+    end
+
+    if UnitPosition then
+        local positionX, positionY = UnitPosition("player")
+        if positionX and positionY and self.lastPlayerX and self.lastPlayerY
+            and (math.abs(positionX - self.lastPlayerX) > 0.01 or math.abs(positionY - self.lastPlayerY) > 0.01) then
+            active = true
+        end
+        self.lastPlayerX = positionX
+        self.lastPlayerY = positionY
+    end
+
+    return active
+end
+
+function Pet:UpdateIdleSleep(elapsed)
+    if self:HasPlayerActivity() then
+        self:MarkPlayerActivity()
+        return
+    end
+
+    if self.isIdleSleeping then
+        self:UpdateSnoreEffect(elapsed)
+        return
+    end
+
+    self.idleSleepTimer = (self.idleSleepTimer or IDLE_SLEEP_DELAY) - elapsed
+    if self.idleSleepTimer <= 0 then
+        self:BeginIdleSleep()
+    end
+end
+
 function Pet:Play(name)
     local animation = ANIMATIONS[name]
     if not animation or not self.frame then
         return
+    end
+
+    if self.isMercenaryCasting and name ~= "mercenaryCast" then
+        return
+    end
+
+    if name ~= "snoring" and self.isIdleSleeping then
+        self.isIdleSleeping = false
+        self.idleSleepTimer = IDLE_SLEEP_DELAY
+        self:HideSnoreEffect()
     end
 
     self.animation = animation
@@ -863,6 +1104,7 @@ function Pet:Update(elapsed)
     if self.isWatchingChat and not self.isDragging and not self.animation then
         self:Play("typingGaze")
     end
+    self:UpdateIdleSleep(elapsed)
     self:UpdateAnimation(elapsed)
     self:UpdateBubble(elapsed)
     self:UpdateThought(elapsed)
@@ -873,7 +1115,6 @@ function Pet:Update(elapsed)
 
     self.blinkTimer = self.blinkTimer - elapsed
     self.sneezeTimer = self.sneezeTimer - elapsed
-    self.sleepTimer = self.sleepTimer - elapsed
     self.emoteTimer = self.emoteTimer - elapsed
     self.activityTimer = self.activityTimer - elapsed
 
@@ -884,9 +1125,6 @@ function Pet:Update(elapsed)
     elseif self.activityTimer <= 0 then
         self.activityTimer = RandomActivityDelay()
         self:PlayPeriodicActivity()
-    elseif self.sleepTimer <= 0 then
-        self.sleepTimer = RandomSleepDelay()
-        self:Play("sleepy")
     elseif self.emoteTimer <= 0 then
         self.emoteTimer = RandomEmoteDelay()
         self:PlayPassiveEmote()
@@ -926,6 +1164,7 @@ function Pet:Show()
     end
     Addon.db.pet.shown = true
     self.frame:Show()
+    self:WakeFromIdle()
     if Addon.Board and Addon.Board.petCheckbox then
         Addon.Board.petCheckbox:SetChecked(true)
     end
@@ -1056,6 +1295,30 @@ function Pet:CreateContextMenu()
     self.contextMenu = menu
 end
 
+function Pet:CreateSnoreEffect(parent)
+    local frame = CreateFrame("Frame", nil, parent)
+    frame:SetWidth(64)
+    frame:SetHeight(58)
+    frame:SetPoint("BOTTOMLEFT", parent, "TOP", 66, -42)
+    frame:SetFrameStrata("TOOLTIP")
+
+    local letters = {}
+    local labels = { "Z", "z", "z" }
+    for index, label in ipairs(labels) do
+        local letter = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        letter:SetText(label)
+        letter:SetTextColor(0.48, 0.86, 1, 1)
+        letter:SetShadowColor(0.02, 0.12, 0.24, 0.9)
+        letter:SetShadowOffset(1, -1)
+        letter:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", index * 7, index * 6)
+        letters[index] = letter
+    end
+    frame:Hide()
+
+    self.snoreFrame = frame
+    self.snoreLetters = letters
+end
+
 function Pet:Create()
     if self.frame then
         return
@@ -1092,14 +1355,29 @@ function Pet:Create()
     self:CreateCrowLaunchEffect()
     self:CreateLevitateCloudEffect()
     self:CreateContextMenu()
+    self:CreateSnoreEffect(button)
     self:ApplyPosition()
     self:ResetTimers()
     button:RegisterEvent("PLAYER_ENTERING_WORLD")
     button:RegisterEvent("PLAYER_DEAD")
     button:RegisterEvent("PLAYER_ALIVE")
     button:RegisterEvent("PLAYER_UNGHOST")
-    button:SetScript("OnEvent", function()
-        Pet:RefreshGhostState()
+    button:RegisterEvent("UNIT_SPELLCAST_START")
+    button:RegisterEvent("UNIT_SPELLCAST_STOP")
+    button:RegisterEvent("UNIT_SPELLCAST_FAILED")
+    button:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED")
+    button:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
+    button:RegisterEvent("UNIT_SPELLCAST_CHANNEL_START")
+    button:RegisterEvent("UNIT_SPELLCAST_CHANNEL_STOP")
+    button:SetScript("OnEvent", function(_, event, ...)
+        if event == "PLAYER_ENTERING_WORLD"
+            or event == "PLAYER_DEAD"
+            or event == "PLAYER_ALIVE"
+            or event == "PLAYER_UNGHOST" then
+            Pet:RefreshGhostState()
+        else
+            Pet:HandleSpellcastEvent(event, ...)
+        end
     end)
     self:RefreshGhostState()
 
@@ -1109,6 +1387,7 @@ function Pet:Create()
 
     button:SetScript("OnMouseDown", function()
         Pet.wasDragged = false
+        Pet:WakeFromIdle()
     end)
 
     button:SetScript("OnDragStart", function(self)
@@ -1140,6 +1419,9 @@ function Pet:Create()
                 return
             end
             if Pet:RegisterRapidClick() then
+                return
+            end
+            if not Pet:CanShowClickChatter() then
                 return
             end
             Pet:PlayTalkingAnimation()
