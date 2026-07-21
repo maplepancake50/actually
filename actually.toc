@@ -2,7 +2,7 @@
 ## Title: actually
 ## Notes: Draggable utility-spell tier board prototype for Ascension Season 10 caches.
 ## Author: Luke
-## Version: 0.2.3
+## Version: 0.2.4
 ## SavedVariables: ActuallyDB
 
 Core.lua
@@ -17,6 +17,8 @@ RaidTargets.lua
 CallerArrow.lua
 CacheTips.lua
 AssistLogUI.lua
+FocusAssignments.lua
+FocusAssignmentsUI.lua
 MinimapButton.lua
 Pet.lua
 BuildAnalyzer.lua

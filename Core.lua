@@ -6,7 +6,7 @@ local Util = Addon.Util or {}
 Addon.Util = Util
 
 Addon.name = addonName or "actually"
-Addon.version = "0.2.3"
+Addon.version = "0.2.4"
 Addon.MESSAGE_PREFIX = "ACTUALLY"
 Addon.tierOrder = { "S", "A", "B", "C", "D", "U" }
 Addon.DEFAULT_PERSONAL_LIST_NAME = "My Tier List"
@@ -63,7 +63,7 @@ function Util.SetBackdrop(frame, color, borderColor)
 end
 
 local defaults = {
-    version = 9,
+    version = 10,
     customSpells = {},
     spellTombstones = {},
     sync = {
@@ -74,6 +74,11 @@ local defaults = {
         pendingUploads = {},
         activeParticipantRuns = {},
         deletedFights = {},
+    },
+    focusAssignments = {
+        targetsText = "",
+        dps = {},
+        preferred = {},
     },
     callerArrow = {
         enabled = false,
@@ -239,7 +244,7 @@ local function InitializeListStorage(db)
     end
 
     db.board = nil
-    db.version = 9
+    db.version = 10
 end
 
 function Addon:GetActiveList()
@@ -345,6 +350,9 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
     if Addon.CacheTips then
         Addon.CacheTips:Create()
     end
+    if Addon.FocusAssignments then
+        Addon.FocusAssignments:Initialize()
+    end
 
     SLASH_ACTUALLY1 = "/actually"
     SLASH_ACTUALLY2 = "/act"
@@ -384,6 +392,8 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
             Addon.Backups:HandleCommand(string.sub(rawMessage, 8))
         elseif lowerMessage == "assistlog" and Addon.AssistLogUI then
             Addon.AssistLogUI:Show()
+        elseif (lowerMessage == "focus" or lowerMessage == "focusassign") and Addon.FocusAssignments then
+            Addon.FocusAssignments:Toggle()
         elseif string.sub(lowerMessage, 1, 10) == "assistlog " and Addon.RaidTargets then
             if not Addon.RaidTargets:HandleCommand(string.sub(rawMessage, 11)) then
                 Addon:Print("Assist Tracker: start [fight], stop, toggle [fight], caller <player|target|me>, pending [retry|clear]")
