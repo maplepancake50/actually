@@ -192,6 +192,11 @@ end
 function CallerArrow:SetEnabled(enabled, notifyIfUnavailable)
     Addon.db.callerArrow = type(Addon.db.callerArrow) == "table" and Addon.db.callerArrow or {}
     Addon.db.callerArrow.enabled = enabled == true
+    if self.events then
+        self.events:SetScript("OnUpdate", enabled and function(_, elapsed)
+            CallerArrow:OnUpdate(elapsed)
+        end or nil)
+    end
     self.elapsed = UPDATE_INTERVAL
     self.mapRefreshElapsed = MAP_REFRESH_INTERVAL
     if enabled and not self:IsTargetInRaid() and notifyIfUnavailable then
@@ -212,10 +217,14 @@ function CallerArrow:NewRevision()
 end
 
 function CallerArrow:BroadcastTarget(identity, revision, channel, target)
-    if not SendAddonMessage or not identity or identity == "" then return false end
+    if not identity or identity == "" then return false end
     if not Addon.Official or not Addon.Official:IsOfficer() then return false end
     local message = table.concat({ CALLER_KIND, tostring(CALLER_PROTOCOL), "S",
         Encode(identity), Encode(revision or Addon.db.assistLog.selectedCallerRevision or "") }, "|")
+    if Addon.Sync and Addon.Sync.QueueMessage then
+        return Addon.Sync:QueueMessage(message, channel or "RAID", target, "ALERT")
+    end
+    if not SendAddonMessage then return false end
     return pcall(SendAddonMessage, Addon.MESSAGE_PREFIX, message, channel or "RAID", target)
 end
 
@@ -228,12 +237,16 @@ function CallerArrow:AssignTarget(identity)
 end
 
 function CallerArrow:RequestTarget()
-    if not SendAddonMessage or not GetNumRaidMembers or GetNumRaidMembers() == 0 then return end
+    if not GetNumRaidMembers or GetNumRaidMembers() == 0 then return end
     local now = GetTime and GetTime() or 0
     if now - (self.lastQueryAt or -100) < 8 then return end
     self.lastQueryAt = now
-    pcall(SendAddonMessage, Addon.MESSAGE_PREFIX,
-        table.concat({ CALLER_KIND, tostring(CALLER_PROTOCOL), "Q" }, "|"), "RAID")
+    local message = table.concat({ CALLER_KIND, tostring(CALLER_PROTOCOL), "Q" }, "|")
+    if Addon.Sync and Addon.Sync.QueueMessage then
+        Addon.Sync:QueueMessage(message, "RAID", nil, "ALERT")
+    elseif SendAddonMessage then
+        pcall(SendAddonMessage, Addon.MESSAGE_PREFIX, message, "RAID")
+    end
 end
 
 function CallerArrow:HandleMessage(message, channel, sender)
@@ -347,7 +360,7 @@ function CallerArrow:Initialize()
     events:SetScript("OnEvent", function(_, event, ...)
         if event == "CHAT_MSG_ADDON" then
             local prefix, message, channel, sender = ...
-            if prefix == Addon.MESSAGE_PREFIX then
+            if prefix == Addon.MESSAGE_PREFIX and string.sub(message or "", 1, 3) == CALLER_KIND .. "|" then
                 CallerArrow:HandleMessage(message, channel, sender)
             end
             return
@@ -360,9 +373,9 @@ function CallerArrow:Initialize()
     -- Keep updates on this always-shown controller frame. The visual arrow is
     -- hidden whenever position data is unavailable, and hidden frames do not
     -- receive OnUpdate callbacks on this client.
-    events:SetScript("OnUpdate", function(_, elapsed)
-        CallerArrow:OnUpdate(elapsed)
-    end)
+    if self:IsEnabled() then
+        events:SetScript("OnUpdate", function(_, elapsed) CallerArrow:OnUpdate(elapsed) end)
+    end
     self.events = events
     self:RequestTarget()
 end

@@ -125,7 +125,7 @@ function FapAlert:Trigger()
         Addon:Print("FAP alert is raid-only. Join a raid before using /actually fap.")
         return false
     end
-    if not SendAddonMessage then
+    if not SendAddonMessage and not (Addon.Sync and Addon.Sync.QueueMessage) then
         Addon:Print("This client cannot send addon messages.")
         return false
     end
@@ -140,8 +140,13 @@ function FapAlert:Trigger()
     local token = tostring(time and time() or 0) .. "." .. tostring(math.random(100000, 999999))
     self.lastToken = token
     self:Show()
-    local sent = pcall(SendAddonMessage, Addon.MESSAGE_PREFIX,
-        MESSAGE_KIND .. "|" .. PROTOCOL .. "|" .. token, "RAID")
+    local message = MESSAGE_KIND .. "|" .. PROTOCOL .. "|" .. token
+    local sent
+    if Addon.Sync and Addon.Sync.QueueMessage then
+        sent = Addon.Sync:QueueMessage(message, "RAID", nil, "ALERT")
+    else
+        sent = pcall(SendAddonMessage, Addon.MESSAGE_PREFIX, message, "RAID")
+    end
     if not sent then
         Addon:Print("Could not send the FAP alert to the raid.")
         return false
@@ -167,7 +172,8 @@ function FapAlert:Initialize()
     local events = CreateFrame("Frame")
     events:RegisterEvent("CHAT_MSG_ADDON")
     events:SetScript("OnEvent", function(_, event, prefix, message, channel, sender)
-        if event == "CHAT_MSG_ADDON" and prefix == Addon.MESSAGE_PREFIX then
+        if event == "CHAT_MSG_ADDON" and prefix == Addon.MESSAGE_PREFIX
+            and string.sub(message or "", 1, string.len(MESSAGE_KIND) + 1) == MESSAGE_KIND .. "|" then
             FapAlert:HandleMessage(message, channel, sender)
         end
     end)

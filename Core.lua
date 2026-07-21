@@ -6,7 +6,7 @@ local Util = Addon.Util or {}
 Addon.Util = Util
 
 Addon.name = addonName or "actually"
-Addon.version = "0.2.4"
+Addon.version = "0.2.6"
 Addon.MESSAGE_PREFIX = "ACTUALLY"
 Addon.tierOrder = { "S", "A", "B", "C", "D", "U" }
 Addon.DEFAULT_PERSONAL_LIST_NAME = "My Tier List"
@@ -77,6 +77,9 @@ local defaults = {
     },
     focusAssignments = {
         targetsText = "",
+        assignedTarget = "",
+        assignedBy = "",
+        assignmentRevision = "",
         dps = {},
         preferred = {},
     },

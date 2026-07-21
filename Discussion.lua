@@ -71,7 +71,7 @@ function Discussion:GetThread(spellID)
 end
 
 function Discussion:Broadcast(spellID, kind, text, commentID, officer)
-    if not SendAddonMessage then
+    if not SendAddonMessage and not (Addon.Sync and Addon.Sync.QueueMessage) then
         return
     end
 
@@ -86,7 +86,11 @@ function Discussion:Broadcast(spellID, kind, text, commentID, officer)
     if Addon.Sync and Addon.Sync.BroadcastLive then
         Addon.Sync:BroadcastLive(payload)
     elseif IsInGuild and IsInGuild() then
-        SendAddonMessage(MESSAGE_PREFIX, payload, "GUILD")
+        if Addon.Sync and Addon.Sync.QueueMessage then
+            Addon.Sync:QueueMessage(payload, "GUILD", nil, "NORMAL")
+        else
+            SendAddonMessage(MESSAGE_PREFIX, payload, "GUILD")
+        end
     end
 end
 
@@ -564,7 +568,7 @@ end
 local messageFrame = CreateFrame("Frame")
 messageFrame:RegisterEvent("CHAT_MSG_ADDON")
 messageFrame:SetScript("OnEvent", function(_, event, prefix, message, channel, sender)
-    if event ~= "CHAT_MSG_ADDON" or prefix ~= MESSAGE_PREFIX
+    if event ~= "CHAT_MSG_ADDON" or prefix ~= MESSAGE_PREFIX or string.sub(message or "", 1, 5) ~= "DISC|"
         or (channel ~= "GUILD" and channel ~= "WHISPER") or not Addon.db then
         return
     end

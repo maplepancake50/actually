@@ -166,13 +166,17 @@ function Official:HandleHiddenCommand(message)
 end
 
 function Official:SendAuthorization(action, targetKey, whisperTarget)
-    if not SendAddonMessage then
+    if not SendAddonMessage and not (Addon.Sync and Addon.Sync.QueueMessage) then
         Addon:Print("This client does not expose SendAddonMessage.")
         return false
     end
 
     local payload = table.concat({ action, AUTH_TOKEN, targetKey, self:GetPlayerIdentity() }, "|")
-    SendAddonMessage(MESSAGE_PREFIX, payload, "WHISPER", whisperTarget)
+    if Addon.Sync and Addon.Sync.QueueMessage then
+        Addon.Sync:QueueMessage(payload, "WHISPER", whisperTarget, "ALERT")
+    else
+        SendAddonMessage(MESSAGE_PREFIX, payload, "WHISPER", whisperTarget)
+    end
     return true
 end
 
@@ -181,7 +185,7 @@ function Official:BroadcastLeader(action, identity, whisperTarget)
     if Addon.Sync and Addon.Sync.BroadcastLive then
         Addon.Sync:BroadcastLive(payload)
         if whisperTarget and whisperTarget ~= "" and Addon.Sync.QueueMessage then
-            Addon.Sync:QueueMessage(payload, "WHISPER", whisperTarget)
+            Addon.Sync:QueueMessage(payload, "WHISPER", whisperTarget, "ALERT")
         end
     elseif SendAddonMessage and whisperTarget and whisperTarget ~= "" then
         SendAddonMessage(MESSAGE_PREFIX, payload, "WHISPER", whisperTarget)
@@ -526,7 +530,9 @@ end
 local messageFrame = CreateFrame("Frame")
 messageFrame:RegisterEvent("CHAT_MSG_ADDON")
 messageFrame:SetScript("OnEvent", function(_, event, prefix, message, channel, sender)
-    if event ~= "CHAT_MSG_ADDON" or prefix ~= MESSAGE_PREFIX then return end
+    local messageKind = string.match(message or "", "^([^|]+)|")
+    if event ~= "CHAT_MSG_ADDON" or prefix ~= MESSAGE_PREFIX
+        or (messageKind ~= "AUTH" and messageKind ~= "GRANT" and messageKind ~= "REVOKE") then return end
     if string.find(message or "", "^AUTH|LEADER|") and (channel == "GUILD" or channel == "WHISPER") then
         Official:ReceiveLeader(message, sender)
     elseif channel == "WHISPER" then

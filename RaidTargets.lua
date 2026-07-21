@@ -19,6 +19,8 @@ local MAX_ACTIVE_RUN_AGE = 6 * 60 * 60
 local TOMBSTONE_RETENTION = 180 * 24 * 60 * 60
 local MAX_TOMBSTONES = 1000
 local MAX_UPLOAD_ATTEMPTS = 20
+local MAX_SAVED_FIGHTS = 200
+local UPDATE_INTERVAL = 0.10
 
 local KIND = "AL"
 local PROTOCOL = 2
@@ -70,19 +72,18 @@ local function Hash(value)
     return tostring(hash)
 end
 
-local function DirectMessage(message, channel, target)
+local function DirectMessage(message, channel, target, priority, tag)
+    if Addon.Sync and Addon.Sync.initialized and Addon.Sync.QueueMessage then
+        return Addon.Sync:QueueMessage(message, channel, target, priority or "ALERT", tag)
+    end
     if not SendAddonMessage then
         return false
     end
     return pcall(SendAddonMessage, Addon.MESSAGE_PREFIX, message, channel, target)
 end
 
-local function QueuedMessage(message, channel, target)
-    if Addon.Sync and Addon.Sync.initialized and Addon.Sync.QueueMessage then
-        Addon.Sync:QueueMessage(message, channel, target)
-        return true
-    end
-    return DirectMessage(message, channel, target)
+local function QueuedMessage(message, channel, target, priority, tag)
+    return DirectMessage(message, channel, target, priority or "NORMAL", tag)
 end
 
 local function TransportLog(message)
@@ -335,7 +336,7 @@ function RaidTargets:PruneDeletedFights()
     end
 end
 
-function RaidTargets:TombstoneFight(fight)
+function RaidTargets:TombstoneFight(fight, silent)
     if not fight or not fight.id then return end
     Addon.db.assistLog.deletedFights = type(Addon.db.assistLog.deletedFights) == "table"
         and Addon.db.assistLog.deletedFights or {}
@@ -345,7 +346,26 @@ function RaidTargets:TombstoneFight(fight)
         expected = CopyKeys(fight.expected),
     }
     self:PruneDeletedFights()
-    SendCancelControl(fight.id, "RAID")
+    if not silent then SendCancelControl(fight.id, "RAID") end
+end
+
+function RaidTargets:PruneSavedFights()
+    local fights = Addon.db.assistLog.fights or {}
+    while #fights > MAX_SAVED_FIGHTS do
+        local oldestIndex = 1
+        local oldestEpoch = tonumber(fights[1] and fights[1].startedEpoch) or 0
+        for index = 2, #fights do
+            local startedEpoch = tonumber(fights[index].startedEpoch) or 0
+            if startedEpoch < oldestEpoch then
+                oldestIndex, oldestEpoch = index, startedEpoch
+            end
+        end
+        local removed = table.remove(fights, oldestIndex)
+        if removed then
+            self:TombstoneFight(removed, true)
+            if self.receivingFights then self.receivingFights[removed.id] = nil end
+        end
+    end
 end
 
 function RaidTargets:Initialize()
@@ -360,6 +380,7 @@ function RaidTargets:Initialize()
     Addon.db.assistLog.deletedFights = type(Addon.db.assistLog.deletedFights) == "table"
         and Addon.db.assistLog.deletedFights or {}
     self:PruneDeletedFights()
+    self:PruneSavedFights()
     -- GetTime() can restart from a smaller value after a full client restart.
     -- Force every unacknowledged saved upload to retry in this login.
     for _, upload in pairs(Addon.db.assistLog.pendingUploads) do
@@ -395,10 +416,12 @@ function RaidTargets:Initialize()
     if self.activeOfficerRun then
         self.activeOfficerRun.nextStartBroadcastAt = Now() + 1
     end
+    self.receivingFights = {}
     for _, fight in ipairs(Addon.db.assistLog.fights) do
         if fight.state == "receiving"
             and Stamp() <= (tonumber(fight.stopBroadcastUntilEpoch) or 0) then
             fight.nextStopBroadcastAt = Now() + 1
+            self.receivingFights[fight.id] = fight
         end
     end
     self.incomingTransfers = {}
@@ -487,6 +510,7 @@ function RaidTargets:HandleCommand(arguments)
     elseif command == "pending" then
         local option = string.lower(Addon.Util.Trim(rest))
         if option == "clear" then
+            if Addon.Sync and Addon.Sync.CancelQueuedTagPrefix then Addon.Sync:CancelQueuedTagPrefix("AL:") end
             Addon.db.assistLog.pendingUploads = {}
             Addon:Print("Cleared all local Assist Tracker pending uploads.")
         elseif option == "retry" then
@@ -644,6 +668,8 @@ function RaidTargets:Stop()
     self.activeOfficerRun = nil
     Addon.db.assistLog.activeOfficerRun = nil
     table.insert(Addon.db.assistLog.fights, run)
+    self.receivingFights[run.id] = run
+    self:PruneSavedFights()
     Addon.db.assistLog.lastFightID = run.id
 
     SendStopControl(run, "RAID")
@@ -658,6 +684,7 @@ function RaidTargets:DeleteFight(runID)
         if fights[index].id == runID then
             self:TombstoneFight(fights[index])
             table.remove(fights, index)
+            if self.receivingFights then self.receivingFights[runID] = nil end
             self:NotifyChanged()
             return true
         end
@@ -893,6 +920,7 @@ function RaidTargets:QueueUpload(run)
         createdEpoch = Stamp(),
         lastSentAt = 0,
         attempts = 0,
+        tag = "AL:" .. transferID,
         nextQueryAt = Now() + PENDING_QUERY_INTERVAL,
     }
     if #upload.chunks > MAX_TRANSFER_CHUNKS then
@@ -913,6 +941,7 @@ function RaidTargets:SendUpload(upload)
         return
     end
     if upload.retryDisabled or upload.dormant then return end
+    upload.tag = upload.tag or (upload.transferID and ("AL:" .. upload.transferID))
     if (tonumber(upload.attempts) or 0) >= MAX_UPLOAD_ATTEMPTS then
         upload.dormant = true
         TransportLog("Paused an unacknowledged upload after " .. tostring(MAX_UPLOAD_ATTEMPTS) .. " attempts.")
@@ -925,15 +954,17 @@ function RaidTargets:SendUpload(upload)
         upload.failedReason = "Timeline exceeds the transfer limit."
         return
     end
+    if Addon.Sync and Addon.Sync.CanQueueMessages and not Addon.Sync:CanQueueMessages(total, "BULK") then
+        upload.lastSentAt = Now()
+        return
+    end
     for index, chunk in ipairs(upload.chunks) do
         QueuedMessage(table.concat({
             KIND, "D", tostring(PROTOCOL), Encode(upload.runID), Encode(upload.transferID),
             tostring(index), tostring(total), upload.digest, chunk,
-        }, "|"), "WHISPER", upload.officer)
+        }, "|"), "WHISPER", upload.officer, "BULK", upload.tag)
     end
-    -- Sync.lua accounts for its 0.15s/message queue when scheduling retries;
-    -- do the same so a large first transfer finishes before retrying.
-    upload.lastSentAt = Now() + (total * 0.15)
+    upload.lastSentAt = Now()
     upload.attempts = (upload.attempts or 0) + 1
     TransportLog("Queued " .. tostring(total) .. " chunk(s) for " .. ShortName(upload.officer)
         .. " (attempt " .. tostring(upload.attempts) .. ").")
@@ -951,7 +982,7 @@ function RaidTargets:ApplyTransfer(fight, sender, transferID, payload)
         -- pending copy, but it must not restore the deleted timeline.
         QueuedMessage(table.concat({
             KIND, "C", tostring(PROTOCOL), Encode(fight.id), Encode(transferID),
-        }, "|"), "WHISPER", sender)
+        }, "|"), "WHISPER", sender, "ALERT")
         return true
     end
     local existingPlayer = fight.players and fight.players[key]
@@ -960,7 +991,7 @@ function RaidTargets:ApplyTransfer(fight, sender, transferID, payload)
         -- Once accepted, never let a later payload silently rewrite history.
         QueuedMessage(table.concat({
             KIND, "C", tostring(PROTOCOL), Encode(fight.id), Encode(transferID),
-        }, "|"), "WHISPER", sender)
+        }, "|"), "WHISPER", sender, "ALERT")
         return true
     end
     local clock = fight.clock and fight.clock[key]
@@ -981,7 +1012,7 @@ function RaidTargets:ApplyTransfer(fight, sender, transferID, payload)
     fight.players[key] = player
     QueuedMessage(table.concat({
         KIND, "C", tostring(PROTOCOL), Encode(fight.id), Encode(transferID),
-    }, "|"), "WHISPER", sender)
+    }, "|"), "WHISPER", sender, "ALERT")
     TransportLog("Processed target timeline from " .. ShortName(sender) .. " and queued acknowledgement.")
     self:NotifyChanged()
     return true
@@ -1094,7 +1125,7 @@ function RaidTargets:HandleDataChunk(runID, transferID, index, total, digest, ch
         if tombstone.expected and tombstone.expected[PlayerKey(sender)] then
             QueuedMessage(table.concat({
                 KIND, "C", tostring(PROTOCOL), Encode(runID), Encode(transferID),
-            }, "|"), "WHISPER", sender)
+            }, "|"), "WHISPER", sender, "ALERT")
         end
         return
     end
@@ -1225,6 +1256,9 @@ function RaidTargets:HandleMessage(message, channel, sender)
             self.participantRuns[runID] = nil
         end
         if pending and senderKey == PlayerKey(pending.officer) then
+            if pending.tag and Addon.Sync and Addon.Sync.CancelQueuedTag then
+                Addon.Sync:CancelQueuedTag(pending.tag)
+            end
             Addon.db.assistLog.pendingUploads[runID] = nil
         end
         self:NotifyChanged()
@@ -1239,6 +1273,11 @@ function RaidTargets:HandleMessage(message, channel, sender)
         if upload and upload.transferID == transferID and PlayerKey(sender) == PlayerKey(upload.officer) then
             -- Officer has validated and processed the data. This is the only
             -- point at which the sending player's saved copy is auto-wiped.
+            if upload.tag and Addon.Sync and Addon.Sync.CancelQueuedTag then
+                Addon.Sync:CancelQueuedTag(upload.tag)
+            elseif upload.tag and Addon.Sync and Addon.Sync.ForgetTag then
+                Addon.Sync:ForgetTag(upload.tag)
+            end
             Addon.db.assistLog.pendingUploads[runID] = nil
             TransportLog("Officer acknowledged " .. runID .. "; removed local pending payload.")
             self:NotifyChanged()
@@ -1261,13 +1300,17 @@ function RaidTargets:OnEvent(event, ...)
     end
     if event == "CHAT_MSG_ADDON" then
         local prefix, message, channel, sender = ...
-        if prefix == Addon.MESSAGE_PREFIX then
+        if prefix == Addon.MESSAGE_PREFIX and message and string.sub(message, 1, 3) == KIND .. "|" then
             self:HandleMessage(message, channel, sender)
         end
     end
 end
 
 function RaidTargets:OnUpdate(elapsed)
+    self.updateElapsed = (self.updateElapsed or 0) + elapsed
+    if self.updateElapsed < UPDATE_INTERVAL then return end
+    elapsed = self.updateElapsed
+    self.updateElapsed = 0
     local now = Now()
     local epoch = Stamp()
     if self.activeOfficerRun and now >= (tonumber(self.activeOfficerRun.nextStartBroadcastAt) or 0) then
@@ -1292,9 +1335,10 @@ function RaidTargets:OnUpdate(elapsed)
     end
     RemindController(self.activeOfficerRun)
 
-    for _, fight in ipairs(Addon.db.assistLog.fights or {}) do
-        if fight.state == "receiving" and epoch <= (tonumber(fight.stopBroadcastUntilEpoch) or 0)
-            and now >= (tonumber(fight.nextStopBroadcastAt) or 0) then
+    for runID, fight in pairs(self.receivingFights or {}) do
+        if epoch > (tonumber(fight.stopBroadcastUntilEpoch) or 0) then
+            self.receivingFights[runID] = nil
+        elseif now >= (tonumber(fight.nextStopBroadcastAt) or 0) then
             SendStopControl(fight, "RAID")
             fight.nextStopBroadcastAt = now + CONTROL_REPLAY_INTERVAL
         end
@@ -1329,8 +1373,13 @@ function RaidTargets:OnUpdate(elapsed)
         for _, upload in pairs(Addon.db.assistLog.pendingUploads or {}) do
             local retryDelay = (upload.attempts or 0) <= 2 and TRANSFER_RETRY_SECONDS
                 or TRANSFER_SLOW_RETRY_SECONDS
+            upload.tag = upload.tag or (upload.transferID and ("AL:" .. upload.transferID))
+            local queued = upload.tag and Addon.Sync and Addon.Sync.HasQueuedTag
+                and Addon.Sync:HasQueuedTag(upload.tag)
+            local finishedAt = upload.tag and Addon.Sync and Addon.Sync.GetTagFinishedAt
+                and Addon.Sync:GetTagFinishedAt(upload.tag)
             if not upload.retryDisabled and not upload.dormant
-                and Now() - (upload.lastSentAt or 0) >= retryDelay then
+                and not queued and Now() - (finishedAt or upload.lastSentAt or 0) >= retryDelay then
                 self:SendUpload(upload)
             end
         end

@@ -16,6 +16,8 @@ local REQUEST_COOLDOWN = 25
 local CHUNK_SIZE = 180
 local MAX_TRANSFER_CHUNKS = 2000
 local MAX_LIVE_PAYLOAD = 240
+local MAX_QUEUED_MESSAGES = 5000
+local RESERVED_ALERT_MESSAGES = 250
 -- Development fallback for cross-guild testing. Production discovery is GUILD.
 local BOOTSTRAP_PEERS = { "Bolty" }
 
@@ -686,8 +688,136 @@ function Sync:RememberPeer(identity)
     end
 end
 
-function Sync:QueueMessage(message, channel, target)
-    table.insert(self.sendQueue, { message = message, channel = channel, target = target })
+local function NewMessageQueue()
+    return { items = {}, head = 1, tail = 0 }
+end
+
+local function QueuePush(queue, item)
+    queue.tail = queue.tail + 1
+    queue.items[queue.tail] = item
+end
+
+local function QueuePop(queue)
+    while queue.head <= queue.tail and queue.items[queue.head] == nil do
+        queue.head = queue.head + 1
+    end
+    if queue.head > queue.tail then
+        queue.items, queue.head, queue.tail = {}, 1, 0
+        return nil
+    end
+    local item = queue.items[queue.head]
+    queue.items[queue.head] = nil
+    queue.head = queue.head + 1
+    if queue.head > 128 and queue.head > (queue.tail / 2) then
+        local compacted = {}
+        for index = queue.head, queue.tail do
+            if queue.items[index] then compacted[#compacted + 1] = queue.items[index] end
+        end
+        queue.items = compacted
+        queue.head = 1
+        queue.tail = #compacted
+    end
+    return item
+end
+
+local function QueueLength(queue)
+    return math.max(0, queue.tail - queue.head + 1)
+end
+
+local MESSAGE_PRIORITIES = { "ALERT", "NORMAL", "BULK" }
+
+function Sync:QueueMessage(message, channel, target, priority, tag)
+    priority = priority == "ALERT" and "ALERT" or priority == "BULK" and "BULK" or "NORMAL"
+    if type(message) ~= "string" or string.len(message) > MAX_LIVE_PAYLOAD
+        or not self:CanQueueMessages(1, priority) then return false end
+    local queue = self.sendQueues and self.sendQueues[priority]
+    if not queue then return false end
+    QueuePush(queue, { message = message, channel = channel, target = target, tag = tag })
+    if tag then self.queuedTags[tag] = (self.queuedTags[tag] or 0) + 1 end
+    return true
+end
+
+function Sync:HasQueuedTag(tag)
+    return tag and (self.queuedTags[tag] or 0) > 0
+end
+
+function Sync:GetTagFinishedAt(tag)
+    return tag and self.tagFinishedAt[tag] or nil
+end
+
+function Sync:GetQueueCount()
+    if not self.sendQueues then return 0 end
+    return QueueLength(self.sendQueues.ALERT) + QueueLength(self.sendQueues.NORMAL) + QueueLength(self.sendQueues.BULK)
+end
+
+function Sync:CanQueueMessages(count, priority)
+    local limit = priority == "ALERT" and MAX_QUEUED_MESSAGES
+        or (MAX_QUEUED_MESSAGES - RESERVED_ALERT_MESSAGES)
+    return self:GetQueueCount() + math.max(0, tonumber(count) or 0) <= limit
+end
+
+function Sync:PopMessage()
+    for _, priority in ipairs(MESSAGE_PRIORITIES) do
+        local item = QueuePop(self.sendQueues[priority])
+        if item then
+            if item.tag then
+                self.queuedTags[item.tag] = math.max(0, (self.queuedTags[item.tag] or 1) - 1)
+                if self.queuedTags[item.tag] == 0 then
+                    self.queuedTags[item.tag] = nil
+                    self.tagFinishedAt[item.tag] = Now()
+                end
+            end
+            return item
+        end
+    end
+end
+
+function Sync:ForgetTag(tag)
+    if not tag then return end
+    self.queuedTags[tag] = nil
+    self.tagFinishedAt[tag] = nil
+end
+
+function Sync:CancelQueuedTagPrefix(prefix)
+    if not prefix or prefix == "" or not self.sendQueues then return 0 end
+    local removed = 0
+    for _, priority in ipairs(MESSAGE_PRIORITIES) do
+        local queue = self.sendQueues[priority]
+        local kept = NewMessageQueue()
+        for index = queue.head, queue.tail do
+            local item = queue.items[index]
+            if item and item.tag and string.sub(item.tag, 1, string.len(prefix)) == prefix then
+                removed = removed + 1
+                self.queuedTags[item.tag] = math.max(0, (self.queuedTags[item.tag] or 1) - 1)
+                if self.queuedTags[item.tag] == 0 then self:ForgetTag(item.tag) end
+            elseif item then
+                QueuePush(kept, item)
+            end
+        end
+        self.sendQueues[priority] = kept
+    end
+    return removed
+end
+
+function Sync:CancelQueuedTag(tag)
+    if not tag or tag == "" or not self.sendQueues then return 0 end
+    local removed = 0
+    for _, priority in ipairs(MESSAGE_PRIORITIES) do
+        local queue = self.sendQueues[priority]
+        local kept = NewMessageQueue()
+        for index = queue.head, queue.tail do
+            local item = queue.items[index]
+            if item and item.tag == tag then
+                removed = removed + 1
+                self.queuedTags[tag] = math.max(0, (self.queuedTags[tag] or 1) - 1)
+            elseif item then
+                QueuePush(kept, item)
+            end
+        end
+        self.sendQueues[priority] = kept
+    end
+    if (self.queuedTags[tag] or 0) == 0 then self:ForgetTag(tag) end
+    return removed
 end
 
 function Sync:BroadcastLive(message)
@@ -818,14 +948,19 @@ function Sync:RequestSnapshot(target, force)
 end
 
 function Sync:QueueTransferChunks(transferID, transfer)
+    local tag = "SYNC:" .. transferID
+    transfer.tag = tag
     for index, chunk in ipairs(transfer.chunks) do
         self:QueueMessage(
             "SYNC|S|" .. transferID .. "|" .. tostring(index) .. "|" .. tostring(#transfer.chunks)
                 .. "|" .. transfer.digest .. "|" .. chunk,
             "WHISPER",
-            transfer.target
+            transfer.target,
+            "BULK",
+            tag
         )
     end
+    transfer.lastQueuedAt = Now()
 end
 
 function Sync:SendSnapshot(target)
@@ -846,8 +981,12 @@ function Sync:SendSnapshot(target)
         self:Log("Snapshot for " .. ShortName(target) .. " exceeded the transfer limit.")
         return
     end
+    if not self:CanQueueMessages(#chunks, "BULK") then
+        self:Log("Deferred snapshot for " .. ShortName(target) .. " because the send queue is full.")
+        return
+    end
 
-    local transfer = { target = target, chunks = chunks, digest = digest, sentAt = Now() + (#chunks * 0.15), retries = 0 }
+    local transfer = { target = target, chunks = chunks, digest = digest, retries = 0 }
     self.outgoing[transferID] = transfer
     self:QueueTransferChunks(transferID, transfer)
     self:Log("Sending snapshot " .. transferID .. " to " .. ShortName(target) .. " in " .. tostring(#chunks) .. " chunks.")
@@ -899,7 +1038,7 @@ function Sync:PrintStatus(force)
             .. "; official rev: " .. tostring(Addon.db.lists.official.revision or 0)
             .. "; spells: " .. tostring(spellCount)
             .. "; comments: " .. tostring(commentCount)
-            .. "; queue: " .. tostring(#self.sendQueue)
+            .. "; queue: " .. tostring(self:GetQueueCount())
             .. (leaderKey == self.selfKey and now < (self.leaderSettlingUntil or 0) and "; reconciling" or "")
             .. "; digest: " .. digest .. "."
     )
@@ -1062,6 +1201,8 @@ function Sync:HandleMessage(message, channel, sender)
         self:SendSnapshot(sender)
         self:SendHello("WHISPER", sender)
     elseif kind == "A" and channel == "WHISPER" then
+        local transfer = self.outgoing[rest]
+        if transfer and transfer.tag then self:ForgetTag(transfer.tag) end
         self.outgoing[rest] = nil
         self:Log("Transfer " .. tostring(rest) .. " acknowledged by " .. ShortName(sender) .. ".")
     elseif kind == "S" and channel == "WHISPER" then
@@ -1103,7 +1244,7 @@ function Sync:HandleMessage(message, channel, sender)
                 local _, valid = self:ApplySnapshot(snapshot)
                 if valid then
                     self:Log("Transfer " .. transferID .. " completed from " .. ShortName(sender) .. ".")
-                    self:QueueMessage("SYNC|A|" .. transferID, "WHISPER", sender)
+                    self:QueueMessage("SYNC|A|" .. transferID, "WHISPER", sender, "ALERT")
                     if self:GetLeader() == self.selfKey then
                         self:SendHeartbeat()
                     end
@@ -1115,13 +1256,13 @@ end
 
 function Sync:OnUpdate(elapsed)
     self.sendElapsed = self.sendElapsed + elapsed
-    if self.sendElapsed >= 0.15 and #self.sendQueue > 0 then
+    if self.sendElapsed >= 0.15 and self:GetQueueCount() > 0 then
         self.sendElapsed = 0
-        local queued = table.remove(self.sendQueue, 1)
+        local queued = self:PopMessage()
         if queued.channel ~= "GUILD" or GuildChannelAvailable() then
-            local sent, errorMessage = pcall(SendAddonMessage, PREFIX, queued.message, queued.channel, queued.target)
-            if not sent then
-                self:Log("Send failed on " .. tostring(queued.channel) .. ": " .. tostring(errorMessage))
+            local called, result = pcall(SendAddonMessage, PREFIX, queued.message, queued.channel, queued.target)
+            if not called or result == false then
+                self:Log("Send failed on " .. tostring(queued.channel) .. ": " .. tostring(result))
             end
         end
     end
@@ -1147,13 +1288,14 @@ function Sync:OnUpdate(elapsed)
     end
 
     for transferID, transfer in pairs(self.outgoing) do
-        if now - transfer.sentAt >= RETRY_INTERVAL then
+        local finishedAt = self:GetTagFinishedAt(transfer.tag) or transfer.lastQueuedAt or now
+        if not self:HasQueuedTag(transfer.tag) and now - finishedAt >= RETRY_INTERVAL then
             if transfer.retries >= MAX_RETRIES then
                 self.outgoing[transferID] = nil
+                self:ForgetTag(transfer.tag)
                 self:Log("Transfer " .. transferID .. " to " .. ShortName(transfer.target) .. " failed after retries.")
             else
                 transfer.retries = transfer.retries + 1
-                transfer.sentAt = now
                 self:Log("Retrying transfer " .. transferID .. " to " .. ShortName(transfer.target) .. ".")
                 self:QueueTransferChunks(transferID, transfer)
             end
@@ -1162,6 +1304,14 @@ function Sync:OnUpdate(elapsed)
     for key, transfer in pairs(self.incoming) do
         if now - transfer.updatedAt > 35 then
             self.incoming[key] = nil
+        end
+    end
+
+    self.tagCleanupElapsed = (self.tagCleanupElapsed or 0) + elapsed
+    if self.tagCleanupElapsed >= 60 then
+        self.tagCleanupElapsed = 0
+        for tag, finishedAt in pairs(self.tagFinishedAt) do
+            if now - finishedAt > 600 then self.tagFinishedAt[tag] = nil end
         end
     end
 end
@@ -1173,7 +1323,9 @@ function Sync:Initialize()
     self.initialized = true
     self.selfKey = PeerKey(UnitName("player"))
     self.peers = {}
-    self.sendQueue = {}
+    self.sendQueues = { ALERT = NewMessageQueue(), NORMAL = NewMessageQueue(), BULK = NewMessageQueue() }
+    self.queuedTags = {}
+    self.tagFinishedAt = {}
     self.outgoing = {}
     self.incoming = {}
     self.lastRequest = {}
@@ -1207,7 +1359,8 @@ function Sync:Initialize()
                     end
                 end
             end
-        elseif event == "CHAT_MSG_ADDON" and prefix == PREFIX and sender and PeerKey(sender) ~= Sync.selfKey then
+        elseif event == "CHAT_MSG_ADDON" and prefix == PREFIX and string.sub(message or "", 1, 5) == "SYNC|"
+            and sender and PeerKey(sender) ~= Sync.selfKey then
             Sync:HandleMessage(message, channel, sender)
         end
     end)

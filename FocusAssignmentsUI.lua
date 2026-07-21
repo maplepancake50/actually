@@ -53,32 +53,8 @@ function UI:Create()
 
     self.myAssignmentText = myPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     self.myAssignmentText:SetPoint("LEFT", myPanel, "LEFT", 12, 0)
-    self.myAssignmentText:SetWidth(560)
+    self.myAssignmentText:SetWidth(750)
     self.myAssignmentText:SetJustifyH("LEFT")
-
-    local focusButton = CreateFrame("Button", "ActuallySetAssignedFocusButton", myPanel,
-        "SecureActionButtonTemplate,UIPanelButtonTemplate")
-    focusButton:SetWidth(160)
-    focusButton:SetHeight(28)
-    focusButton:SetPoint("RIGHT", myPanel, "RIGHT", -10, 0)
-    focusButton:SetText("Set My Focus")
-    focusButton:SetAttribute("type", "macro")
-    focusButton:SetAttribute("macrotext", "")
-    self.focusButton = focusButton
-
-    local blocker = CreateFrame("Button", nil, myPanel)
-    blocker:SetAllPoints(focusButton)
-    blocker:SetFrameLevel(focusButton:GetFrameLevel() + 5)
-    blocker:EnableMouse(true)
-    local blockerTexture = blocker:CreateTexture(nil, "BACKGROUND")
-    blockerTexture:SetAllPoints(blocker)
-    blockerTexture:SetTexture("Interface\\Buttons\\WHITE8X8")
-    blockerTexture:SetVertexColor(0.16, 0.16, 0.18, 1)
-    blocker.text = blocker:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    blocker.text:SetAllPoints(blocker)
-    blocker.text:SetText("Updates after combat")
-    blocker:Hide()
-    self.focusBlocker = blocker
 
     local rosterPanel = CreateFrame("Frame", nil, frame)
     rosterPanel:SetPoint("TOPLEFT", myPanel, "BOTTOMLEFT", 0, -10)
@@ -231,12 +207,6 @@ function UI:Create()
     self:Refresh()
 end
 
-function UI:ApplySecureTarget(target)
-    if not self.focusButton or (InCombatLockdown and InCombatLockdown()) then return end
-    self.focusButton:SetAttribute("type", "macro")
-    self.focusButton:SetAttribute("macrotext", target and ("/focus " .. target) or "")
-end
-
 function UI:RefreshRoster()
     if not self.rosterRows then return end
     local roster = Module:GetSortedRoster()
@@ -252,12 +222,17 @@ function UI:RefreshRoster()
             if color then row.name:SetTextColor(color.r, color.g, color.b) else row.name:SetTextColor(1, 1, 1) end
             row.name:SetText(member.name)
             local target = Module.assignmentByPlayer[member.key]
+            local acknowledgement = Module.acknowledgements and Module.acknowledgements[member.key]
+            local pending = Module.pendingAcks and Module.pendingAcks[member.key]
+            local acknowledgementColor = acknowledgement == "OK" and "66dd88" or "ff7777"
+            local acknowledgementText = pending and " |cffffcc44[WAITING]|r"
+                or (acknowledgement and (" |cff" .. acknowledgementColor .. "[" .. acknowledgement .. "]|r") or "")
             if target then
-                row.assignment:SetText("|cffaaaaaa→|r " .. target)
+                row.assignment:SetText("|cffaaaaaa→|r " .. target .. acknowledgementText)
             elseif member.isDPS then
-                row.assignment:SetText("|cff777777available|r")
+                row.assignment:SetText("|cff777777available|r" .. acknowledgementText)
             else
-                row.assignment:SetText("")
+                row.assignment:SetText(acknowledgementText)
             end
         else
             row:Hide()
@@ -290,22 +265,17 @@ end
 
 function UI:RefreshMyAssignment()
     if not self.myAssignmentText then return end
-    if Module.myAssignment then
-        self.myAssignmentText:SetText("Your assigned focus: |cffffd45a" .. Module.myAssignment .. "|r")
-    else
-        self.myAssignmentText:SetText("Your assigned focus: |cff777777none|r")
+    local waiting, ok, failed = 0, 0, 0
+    for _ in pairs(Module.pendingAcks or {}) do waiting = waiting + 1 end
+    for _, status in pairs(Module.acknowledgements or {}) do
+        if status == "OK" then ok = ok + 1 else failed = failed + 1 end
     end
-    if Module.pendingSecureTarget ~= nil then
-        self.focusBlocker:Show()
+    if Module.currentRevision then
+        self.myAssignmentText:SetText(string.format(
+            "Delivery: |cff66dd88%d received|r  |cffffcc44%d waiting|r  |cffff7777%d failed/no response|r",
+            ok, waiting, failed))
     else
-        self.focusBlocker:Hide()
-        if Module.myAssignment then
-            self.focusButton:Enable()
-            self.focusButton:SetText("Set My Focus")
-        else
-            self.focusButton:Disable()
-            self.focusButton:SetText("No assignment")
-        end
+        self.myAssignmentText:SetText("Build and broadcast assignments. This module does not create or edit macros.")
     end
 end
 
@@ -321,6 +291,10 @@ end
 
 function UI:Show()
     if not self.frame then self:Create() end
+    if not Module:CanPublish() then
+        Addon:Print("Focus Assignments configuration is restricted to the raid leader and assistants.")
+        return
+    end
     Module:BuildAssignments()
     self:Refresh()
     self.frame:Show()
