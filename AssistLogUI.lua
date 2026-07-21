@@ -178,7 +178,7 @@ function UI:Create()
 
     local subtitle = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 1, -4)
-    subtitle:SetText("Raid target-call alignment and follower performance")
+    subtitle:SetText("Tracks whether DPS are using /assist")
     subtitle:SetTextColor(0.52, 0.62, 0.72)
 
     local status = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
