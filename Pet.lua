@@ -182,7 +182,7 @@ local CHATTER = {
     "why didnt you grip me?",
     "I got knocked",
     "I don't want to prestige again",
-    "premade?",
+    "imagine doing premade",
     "I got one shot",
     "I got that spec nerfed",
     "I got that nerfed in season 4",

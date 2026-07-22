@@ -285,14 +285,14 @@ function UI:Refresh()
     self:RefreshAssignments()
     self:RefreshMyAssignment()
     local color = Module.statusColor or { 0.75, 0.8, 0.9 }
-    self.statusLabel:SetText(Module.statusText or "Open with /actually focus, /focusassign, or /fa.")
+    self.statusLabel:SetText(Module.statusText or "Configuration unavailable.")
     self.statusLabel:SetTextColor(color[1], color[2], color[3])
 end
 
 function UI:Show()
     if not self.frame then self:Create() end
     if not Module:CanPublish() then
-        Addon:Print("Focus Assignments configuration is restricted to the raid leader and assistants.")
+        Addon:Print("Focus Assignments configuration is restricted to actually officers and leaders.")
         return
     end
     Module:BuildAssignments()

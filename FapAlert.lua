@@ -7,7 +7,7 @@ Addon.FapAlert = FapAlert
 local MESSAGE_KIND = "FAP"
 local PROTOCOL = "1"
 local DISPLAY_SECONDS = 3
-local SEND_COOLDOWN = 2
+local COOLDOWN_SECONDS = 60
 
 local function Trim(value)
     return string.gsub(tostring(value or ""), "^%s*(.-)%s*$", "%1")
@@ -19,6 +19,21 @@ end
 
 local function InRaid()
     return GetNumRaidMembers and GetNumRaidMembers() > 0
+end
+
+local function Now()
+    return time and time() or (GetTime and GetTime() or 0)
+end
+
+local function IsOfficer(identity)
+    if not Addon.Official or not Addon.Official.IsOfficer then return false end
+    if Addon.Official:IsOfficer(identity) == true then return true end
+    if not identity or string.find(tostring(identity), "-", 1, true) then return false end
+
+    -- CHAT_MSG_ADDON may omit the realm on older clients, while actually's
+    -- authority list stores the canonical Name-Realm identity.
+    local realm = GetRealmName and string.gsub(Trim(GetRealmName()), "%s+", "") or ""
+    return realm ~= "" and Addon.Official:IsOfficer(Trim(identity) .. "-" .. realm) == true
 end
 
 local function IsCurrentRaidMember(name)
@@ -101,7 +116,38 @@ function FapAlert:Create()
     self.frame = frame
 end
 
-function FapAlert:Show()
+function FapAlert:IsEnabled()
+    return not (Addon.db and Addon.db.fapAlert and Addon.db.fapAlert.enabled == false)
+end
+
+function FapAlert:SetEnabled(enabled, preview)
+    Addon.db.fapAlert = type(Addon.db.fapAlert) == "table" and Addon.db.fapAlert or {}
+    Addon.db.fapAlert.enabled = enabled == true
+
+    if not enabled and self.frame then
+        self.frame:Hide()
+    elseif enabled and preview then
+        self:Show(true)
+    end
+
+    if Addon.CacheTips and Addon.CacheTips.RefreshFapToggle then
+        Addon.CacheTips:RefreshFapToggle()
+    end
+end
+
+function FapAlert:GetCooldownRemaining()
+    local untilTime = Addon.db and Addon.db.fapAlert
+        and tonumber(Addon.db.fapAlert.cooldownUntil) or 0
+    return math.max(0, math.ceil(untilTime - Now()))
+end
+
+function FapAlert:StartCooldown()
+    Addon.db.fapAlert = type(Addon.db.fapAlert) == "table" and Addon.db.fapAlert or {}
+    Addon.db.fapAlert.cooldownUntil = Now() + COOLDOWN_SECONDS
+end
+
+function FapAlert:Show(force)
+    if not force and not self:IsEnabled() then return false end
     self:Create()
     self.frame.remaining = DISPLAY_SECONDS
     self.frame:SetScale(1)
@@ -109,6 +155,7 @@ function FapAlert:Show()
     self.frame:Show()
 
     PlayAlertSound()
+    return true
 end
 
 function FapAlert:Trigger()
@@ -116,21 +163,22 @@ function FapAlert:Trigger()
         Addon:Print("FAP alert is raid-only. Join a raid before using /actually fap.")
         return false
     end
+    if not IsOfficer() then
+        Addon:Print("Only an actually officer can trigger the FAP alert.")
+        return false
+    end
     if not SendAddonMessage and not (Addon.Sync and Addon.Sync.QueueMessage) then
         Addon:Print("This client cannot send addon messages.")
         return false
     end
 
-    local now = GetTime and GetTime() or 0
-    if now - (self.lastSentAt or -100) < SEND_COOLDOWN then
-        Addon:Print("FAP alert is on a short cooldown.")
+    local remaining = self:GetCooldownRemaining()
+    if remaining > 0 then
+        Addon:Print("FAP alert is on cooldown for " .. tostring(remaining) .. " more seconds.")
         return false
     end
-    self.lastSentAt = now
 
-    local token = tostring(time and time() or 0) .. "." .. tostring(math.random(100000, 999999))
-    self.lastToken = token
-    self:Show()
+    local token = tostring(Now()) .. "." .. tostring(math.random(100000, 999999))
     local message = MESSAGE_KIND .. "|" .. PROTOCOL .. "|" .. token
     local sent
     if Addon.Sync and Addon.Sync.QueueMessage then
@@ -142,6 +190,11 @@ function FapAlert:Trigger()
         Addon:Print("Could not send the FAP alert to the raid.")
         return false
     end
+
+    self.lastToken = token
+    self:StartCooldown()
+    if self:IsEnabled() then self:Show() end
+    Addon:Print("FAP alert sent. Raid cooldown started for 60 seconds.")
     return true
 end
 
@@ -150,9 +203,19 @@ function FapAlert:HandleMessage(message, channel, sender)
 
     local token = string.match(message or "", "^" .. MESSAGE_KIND .. "|" .. PROTOCOL .. "|([%w%.%-]+)$")
     if not token or token == self.lastToken then return end
+    if not IsOfficer(sender) then return end
 
     self.lastToken = token
-    self:Show()
+    local remaining = self:GetCooldownRemaining()
+    if remaining > 0 then
+        Addon:Print("Ignored FAP alert from " .. tostring(sender)
+            .. ": cooldown has " .. tostring(remaining) .. " seconds remaining.")
+        return
+    end
+
+    self:StartCooldown()
+    if self:IsEnabled() then self:Show() end
+    Addon:Print("FAP alert triggered by " .. tostring(sender) .. ". Cooldown started for 60 seconds.")
 end
 
 function FapAlert:Initialize()

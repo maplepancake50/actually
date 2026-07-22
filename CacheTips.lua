@@ -41,7 +41,7 @@ end
 local function CreateRolePanel(root, definition, anchor)
     local panel = CreateFrame("Frame", nil, root)
     panel:SetWidth(292)
-    panel:SetPoint(anchor.point, root, anchor.point, anchor.x or 0, -210)
+    panel:SetPoint(anchor.point, root, anchor.point, anchor.x or 0, -246)
     panel:SetPoint(anchor.bottom, root, anchor.bottom, anchor.x or 0, 0)
     SetBackdrop(panel,
         { definition.color[1] * 0.10, definition.color[2] * 0.10, definition.color[3] * 0.10, 0.97 },
@@ -147,7 +147,7 @@ function CacheTips:Create()
     local utility = CreateFrame("Frame", nil, root)
     utility:SetPoint("TOPLEFT", root, "TOPLEFT", 0, -70)
     utility:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, -70)
-    utility:SetHeight(86)
+    utility:SetHeight(122)
     SetBackdrop(utility, { 0.075, 0.045, 0.12, 0.96 }, { 0.58, 0.38, 0.88, 0.92 })
 
     local utilityTitle = utility:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -177,8 +177,25 @@ function CacheTips:Create()
         end
     end)
 
+    local fapCheckbox = CreateFrame("CheckButton", "ActuallyFapAlerterCheckButton", utility,
+        "UICheckButtonTemplate")
+    fapCheckbox:SetWidth(26)
+    fapCheckbox:SetHeight(26)
+    fapCheckbox:SetPoint("TOPLEFT", utility, "TOPLEFT", 15, -75)
+    local fapLabel = fapCheckbox:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    fapLabel:SetPoint("LEFT", fapCheckbox, "RIGHT", 4, 1)
+    fapLabel:SetText("FAP Alerter")
+    self.fapCheckbox = fapCheckbox
+
+    fapCheckbox:SetScript("OnClick", function(owner)
+        if Addon.FapAlert then
+            local enabled = owner:GetChecked() == 1 or owner:GetChecked() == true
+            Addon.FapAlert:SetEnabled(enabled, enabled)
+        end
+    end)
+
     local roleHeading = root:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    roleHeading:SetPoint("TOPLEFT", root, "TOPLEFT", 2, -178)
+    roleHeading:SetPoint("TOPLEFT", root, "TOPLEFT", 2, -214)
     roleHeading:SetText("Role Tips")
     roleHeading:SetTextColor(0.82, 0.86, 0.94)
 
@@ -195,6 +212,12 @@ function CacheTips:Create()
     end
 
     self:RefreshArrowToggle()
+    self:RefreshFapToggle()
+end
+
+function CacheTips:RefreshFapToggle()
+    if not self.fapCheckbox then return end
+    self.fapCheckbox:SetChecked(Addon.FapAlert and Addon.FapAlert:IsEnabled() or false)
 end
 
 function CacheTips:RefreshArrowToggle()
@@ -226,6 +249,7 @@ function CacheTips:SetVisible(visible)
         self.root:SetPoint("TOPLEFT", Addon.Board.sectionPanel, "TOPLEFT", 22, -20)
         self.root:SetPoint("BOTTOMRIGHT", Addon.Board.sectionPanel, "BOTTOMRIGHT", -22, bottom)
         self:RefreshArrowToggle()
+        self:RefreshFapToggle()
         self.root:Show()
     else
         for _, edit in pairs(self.roleEdits or {}) do edit:ClearFocus() end

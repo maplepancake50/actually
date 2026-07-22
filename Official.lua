@@ -127,8 +127,10 @@ function Official:IsOwner()
     return owner and NormalizeIdentity(owner) == self:GetPlayerKey()
 end
 
-function Official:IsLeader()
-    return self:IsOwner()
+function Official:IsLeader(identity)
+    local owner = Addon.db and Addon.db.authority and Addon.db.authority.owner
+    identity = identity or self:GetPlayerIdentity()
+    return owner and NormalizeIdentity(owner) == NormalizeIdentity(identity)
 end
 
 function Official:SetCurrentOfficer(enabled)

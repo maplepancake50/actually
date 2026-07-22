@@ -195,13 +195,10 @@ function FocusAssignments:ParseTargets(text)
 end
 
 function FocusAssignments:CanPublish()
-    local raidCount = GetNumRaidMembers and GetNumRaidMembers() or 0
-    if raidCount > 0 then
-        return (IsRaidLeader and IsRaidLeader()) or (IsRaidOfficer and IsRaidOfficer())
-    end
-    local partyCount = GetNumPartyMembers and GetNumPartyMembers() or 0
-    if partyCount > 0 then return IsPartyLeader and IsPartyLeader() end
-    return true
+    return Addon.Official and (
+        (Addon.Official.IsOfficer and Addon.Official:IsOfficer())
+        or (Addon.Official.IsLeader and Addon.Official:IsLeader())
+    ) and true or false
 end
 
 function FocusAssignments:BuildAssignments()
@@ -260,22 +257,13 @@ function FocusAssignments:ResetPreferredAssignments()
     if self.liveEnabled then self:ScheduleBroadcast() end
 end
 
-function FocusAssignments:RaidRank(identity)
-    local wanted = PlayerKey(identity)
-    local raidCount = GetNumRaidMembers and GetNumRaidMembers() or 0
-    if raidCount > 0 then
-        for index = 1, raidCount do
-            local name, rank = GetRaidRosterInfo(index)
-            if name and PlayerKey(name) == wanted then return rank or 0 end
-        end
-        return -1
-    end
-    self:ScanRoster()
-    return self.roster[wanted] and self.roster[wanted].rank or -1
-end
-
 function FocusAssignments:IsTrustedSender(sender)
-    return sender and self:RaidRank(sender) > 0
+    if not sender or not Addon.Official then return false end
+    local authorized = (Addon.Official.IsOfficer and Addon.Official:IsOfficer(sender))
+        or (Addon.Official.IsLeader and Addon.Official:IsLeader(sender))
+    if not authorized then return false end
+    self:ScanRoster()
+    return self.roster[PlayerKey(sender)] ~= nil
 end
 
 function FocusAssignments:NewRevision()
@@ -317,7 +305,7 @@ end
 
 function FocusAssignments:BroadcastAssignments()
     if not self:CanPublish() then
-        self:SetStatus("Only the raid leader or an assistant can broadcast assignments.", 1, 0.3, 0.3)
+        self:SetStatus("Only an actually officer or leader can broadcast assignments.", 1, 0.3, 0.3)
         return false
     end
     self:BuildAssignments()
@@ -482,7 +470,4 @@ function FocusAssignments:Initialize()
     self.eventFrame = frame
     if self.UI and self.UI.Create then self.UI:Create() end
     self:BuildAssignments()
-    SLASH_ACTUALLYFOCUS1 = "/focusassign"
-    SLASH_ACTUALLYFOCUS2 = "/fa"
-    SlashCmdList.ACTUALLYFOCUS = function() FocusAssignments:Toggle() end
 end

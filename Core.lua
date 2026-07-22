@@ -6,7 +6,7 @@ local Util = Addon.Util or {}
 Addon.Util = Util
 
 Addon.name = addonName or "actually"
-Addon.version = "0.2.15"
+Addon.version = "0.2.17"
 Addon.MESSAGE_PREFIX = "ACTUALLY"
 Addon.tierOrder = { "S", "A", "B", "C", "D", "U" }
 Addon.DEFAULT_PERSONAL_LIST_NAME = "My Tier List"
@@ -89,6 +89,10 @@ local defaults = {
         x = 0,
         y = -145,
         size = 110,
+    },
+    fapAlert = {
+        enabled = true,
+        cooldownUntil = 0,
     },
     cacheTips = {
         healer = "",
@@ -361,10 +365,6 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
     if Addon.CacheTips then
         Addon.CacheTips:Create()
     end
-    if Addon.FocusAssignments then
-        Addon.FocusAssignments:Initialize()
-    end
-
     SLASH_ACTUALLY1 = "/actually"
     SLASH_ACTUALLY2 = "/act"
     SlashCmdList.ACTUALLY = function(message)
@@ -405,8 +405,6 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
             Addon.Backups:HandleCommand(string.sub(rawMessage, 8))
         elseif (lowerMessage == "assisttracker" or lowerMessage == "assist tracker") and Addon.AssistLogUI then
             Addon.AssistLogUI:Show()
-        elseif (lowerMessage == "focus" or lowerMessage == "focusassign") and Addon.FocusAssignments then
-            Addon.FocusAssignments:Toggle()
         elseif string.sub(lowerMessage, 1, 14) == "assisttracker " and Addon.RaidTargets then
             if not Addon.RaidTargets:HandleCommand(string.sub(rawMessage, 15)) then
                 Addon:Print("Assist Tracker: start [fight], stop, toggle [fight], timer, caller <player|target|me>, pending [retry|clear]")
