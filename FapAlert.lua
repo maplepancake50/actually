@@ -6,7 +6,7 @@ Addon.FapAlert = FapAlert
 
 local MESSAGE_KIND = "FAP"
 local PROTOCOL = "1"
-local DISPLAY_SECONDS = 4
+local DISPLAY_SECONDS = 3
 local SEND_COOLDOWN = 2
 
 local function Trim(value)
@@ -52,40 +52,34 @@ function FapAlert:Create()
 
     local frame = CreateFrame("Frame", "ActuallyFapAlertFrame", UIParent)
     frame:SetWidth(360)
-    frame:SetHeight(300)
-    frame:SetPoint("CENTER", UIParent, "CENTER", 0, 80)
+    frame:SetHeight(250)
+    frame:SetPoint("RIGHT", UIParent, "RIGHT", -240, 170)
     frame:SetFrameStrata("FULLSCREEN_DIALOG")
     frame:SetFrameLevel(100)
     frame:Hide()
 
     local glow = frame:CreateTexture(nil, "BACKGROUND")
     glow:SetTexture("Interface\\Cooldown\\star4")
-    glow:SetPoint("CENTER", frame, "CENTER", 0, 20)
-    glow:SetWidth(270)
-    glow:SetHeight(270)
+    glow:SetPoint("CENTER", frame, "CENTER", 0, -5)
+    glow:SetWidth(190)
+    glow:SetHeight(190)
     glow:SetBlendMode("ADD")
     glow:SetVertexColor(1, 0.82, 0.12, 0.8)
     frame.glow = glow
 
-    local iconBorder = frame:CreateTexture(nil, "ARTWORK")
-    iconBorder:SetTexture("Interface\\Buttons\\UI-Quickslot2")
-    iconBorder:SetPoint("CENTER", frame, "CENTER", 0, 22)
-    iconBorder:SetWidth(190)
-    iconBorder:SetHeight(190)
-
     local icon = frame:CreateTexture(nil, "ARTWORK")
     local itemTexture = GetItemIcon and GetItemIcon(5634)
     icon:SetTexture(itemTexture or "Interface\\Icons\\INV_Potion_04")
-    icon:SetPoint("CENTER", frame, "CENTER", 0, 22)
-    icon:SetWidth(164)
-    icon:SetHeight(164)
-    icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+    icon:SetPoint("CENTER", frame, "CENTER", 0, -5)
+    icon:SetWidth(128)
+    icon:SetHeight(128)
+    icon:SetTexCoord(0.09, 0.91, 0.09, 0.91)
     frame.icon = icon
 
     local text = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
-    text:SetPoint("TOP", icon, "BOTTOM", 0, -15)
+    text:SetPoint("BOTTOM", icon, "TOP", 0, 18)
     text:SetText("USE FAP NOW")
-    text:SetTextColor(1, 0.12, 0.05, 1)
+    text:SetTextColor(1, 0.35, 0.05, 1)
     text:SetShadowColor(0, 0, 0, 1)
     text:SetShadowOffset(3, -3)
     frame.text = text
@@ -98,9 +92,9 @@ function FapAlert:Create()
         end
 
         local now = GetTime and GetTime() or 0
-        local pulse = 1 + 0.10 * math.sin(now * 9)
+        local pulse = 1 + 0.07 * math.sin(now * 8)
         alertFrame:SetScale(pulse)
-        local alpha = alertFrame.remaining < 0.6 and (alertFrame.remaining / 0.6) or 1
+        local alpha = alertFrame.remaining < 0.75 and (alertFrame.remaining / 0.75) or 1
         alertFrame:SetAlpha(alpha)
     end)
 
@@ -114,9 +108,6 @@ function FapAlert:Show()
     self.frame:SetAlpha(1)
     self.frame:Show()
 
-    if RaidNotice_AddMessage and RaidWarningFrame and ChatTypeInfo and ChatTypeInfo.RAID_WARNING then
-        RaidNotice_AddMessage(RaidWarningFrame, "USE FAP NOW", ChatTypeInfo.RAID_WARNING)
-    end
     PlayAlertSound()
 end
 

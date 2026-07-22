@@ -15,6 +15,9 @@ local CALLER_KIND = "SC"
 local DEFAULT_ARROW_SIZE = 110
 local MIN_ARROW_SIZE = 72
 local MAX_ARROW_SIZE = 180
+local DEATH_PULSE_SECONDS = 3
+local DEATH_HOLD_SECONDS = 6
+local DEATH_FADE_SECONDS = 1
 
 local function PlayerKey(identity)
     return Addon.Util.NormalizeCharacter(identity)
@@ -111,9 +114,11 @@ function CallerArrow:Create()
     frame.arrow = arrow
 
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    title:SetPoint("TOPLEFT", arrow, "BOTTOMLEFT", -6, 3)
-    title:SetPoint("TOPRIGHT", arrow, "BOTTOMRIGHT", 6, 3)
+    title:SetPoint("TOP", arrow, "BOTTOM", 0, 3)
+    title:SetWidth(240)
+    title:SetHeight(38)
     title:SetJustifyH("CENTER")
+    title:SetJustifyV("TOP")
     title:SetTextColor(0.82, 0.94, 1)
     frame.title = title
 
@@ -152,7 +157,7 @@ function CallerArrow:SetArrowSize(size)
     Addon.db.callerArrow.size = size
     if self.frame then
         self.frame:SetWidth(size + 12)
-        self.frame:SetHeight(size + 17)
+        self.frame:SetHeight(size + 40)
         self.frame.arrow:SetWidth(size)
         self.frame.arrow:SetHeight(size)
     end
@@ -194,13 +199,44 @@ function CallerArrow:UpdateDeathState(dead)
     if dead then
         self.frame.arrow:Hide()
         self.frame.title:SetTextColor(1.00, 0.28, 0.24)
-        self.frame.title:SetText("SHOT CALLER - DEAD")
+        self.frame.title:SetFontObject(GameFontNormalLarge)
+        self.frame.title:SetText("SHOT CALLER DEAD\nSOMEONE ELSE SHOT CALL")
+        self.frame.title:SetAlpha(1)
+        self.deathPulseStartedAt = GetTime and GetTime() or 0
+        self.deathAlertExpired = nil
     else
         self.frame.arrow:Show()
         self.frame.arrow:SetVertexColor(0.15, 0.86, 1.00, 1)
         self.frame.title:SetTextColor(0.82, 0.94, 1.00)
+        self.frame.title:SetFontObject(GameFontNormal)
         self.frame.title:SetText("SHOT CALLER")
+        self.frame.title:SetAlpha(1)
+        self.deathPulseStartedAt = nil
+        self.deathAlertExpired = nil
     end
+end
+
+function CallerArrow:UpdateDeathAlert()
+    if not self.targetDead or not self.frame then return false end
+    if self.deathAlertExpired or not self.deathPulseStartedAt then return false end
+    local elapsed = (GetTime and GetTime() or 0) - self.deathPulseStartedAt
+    if elapsed < DEATH_PULSE_SECONDS then
+        local wave = (math.sin(elapsed * math.pi * 3) + 1) / 2
+        self.frame.title:SetAlpha(0.50 + wave * 0.50)
+        return true
+    end
+    local fadeStartsAt = DEATH_PULSE_SECONDS + DEATH_HOLD_SECONDS
+    if elapsed < fadeStartsAt then
+        self.frame.title:SetAlpha(1)
+        return true
+    end
+    if elapsed < fadeStartsAt + DEATH_FADE_SECONDS then
+        self.frame.title:SetAlpha(1 - ((elapsed - fadeStartsAt) / DEATH_FADE_SECONDS))
+        return true
+    end
+    self.frame.title:SetAlpha(0)
+    self.deathAlertExpired = true
+    return false
 end
 
 function CallerArrow:RestorePosition()
@@ -383,16 +419,20 @@ function CallerArrow:OnUpdate(elapsed)
     if not self:RefreshVisibility() then return end
     local dead = UnitIsDeadOrGhost and UnitIsDeadOrGhost(self.unit)
     self:UpdateDeathState(dead)
+    if dead then
+        if self:UpdateDeathAlert() then self.frame:Show() else self.frame:Hide() end
+        return
+    end
     local playerX, playerY, targetX, targetY = self:ReadPositions()
     if not playerX then
-        if dead then self.frame:Show() else self:Hide() end
+        self:Hide()
         return
     end
 
     local deltaX = (targetX - playerX) * MapAspect()
     local deltaY = targetY - playerY
     if math.abs(deltaX) < 0.000001 and math.abs(deltaY) < 0.000001 then
-        if dead then self.frame:Show() else self:Hide() end
+        self:Hide()
         return
     end
 
