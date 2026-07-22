@@ -8,12 +8,12 @@ local SetBackdrop = Addon.Util.SetBackdrop
 local ROLE_DEFINITIONS = {
     {
         key = "healer", title = "HEALER",
-        color = { 0.92, 0.20, 0.24 }, border = { 1.00, 0.38, 0.42 },
+        color = { 0.18, 0.76, 0.32 }, border = { 0.32, 1.00, 0.48 },
         icon = "cross",
     },
     {
         key = "dps", title = "DPS",
-        color = { 0.18, 0.76, 0.32 }, border = { 0.32, 1.00, 0.48 },
+        color = { 0.92, 0.20, 0.24 }, border = { 1.00, 0.38, 0.42 },
         icon = "Interface\\Icons\\INV_Weapon_ShortBlade_05",
     },
     {

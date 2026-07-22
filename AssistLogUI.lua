@@ -1,14 +1,16 @@
 Actually = Actually or {}
 local Addon = Actually
 
--- Standalone Assist Log window, visually aligned with TierBoard.lua without
--- attaching itself to the tier-board navigation. Open with /actually assistlog.
+-- Standalone Assist Tracker window, visually aligned with TierBoard.lua without
+-- attaching itself to the tier-board navigation. Open with /actually assisttracker.
 local UI = {}
 Addon.AssistLogUI = UI
 
 local WIDTH = 970
 local ROW_HEIGHT = 24
 local LOGO = "Interface\\AddOns\\actually\\Textures\\AssistLogLogo"
+local TIMER_ICON = "Interface\\AddOns\\actually\\Textures\\TabIconAssist"
+local TIMER_UPDATE_INTERVAL = 0.10
 
 local COLORS = {
     panel = { 0.025, 0.030, 0.045, 0.995 },
@@ -69,6 +71,7 @@ end
 
 local function StyleButton(button, text, width, accent)
     accent = accent or COLORS.border
+    button.accent = accent
     button:SetWidth(width or 80)
     button:SetHeight(24)
     button:SetText(text)
@@ -81,14 +84,149 @@ local function StyleButton(button, text, width, accent)
         self:SetBackdropColor(0.075, 0.095, 0.125, 1)
     end)
     button:SetScript("OnLeave", function(self)
-        self:SetBackdropBorderColor(accent[1], accent[2], accent[3], accent[4] or 1)
+        local current = self.accent or accent
+        self:SetBackdropBorderColor(current[1], current[2], current[3], current[4] or 1)
         self:SetBackdropColor(0.045, 0.055, 0.075, 0.98)
     end)
 end
 
+function UI:SaveTimerPosition()
+    if not self.timerFrame or not Addon.db or not Addon.db.assistLog then return end
+    local point, _, relativePoint, x, y = self.timerFrame:GetPoint(1)
+    Addon.db.assistLog.timerPosition = {
+        point = point or "CENTER", relativePoint = relativePoint or point or "CENTER",
+        x = math.floor((tonumber(x) or 0) + 0.5), y = math.floor((tonumber(y) or 0) + 0.5),
+    }
+end
+
+function UI:UpdateTimerDisplay()
+    local timer = self.timerFrame
+    if not timer then return end
+    local run = Addon.RaidTargets and Addon.RaidTargets:GetActiveRun()
+    local running = run ~= nil
+    local elapsed = running and math.max(0, GetTime() - (tonumber(run.startedAt) or GetTime())) or 0
+    timer.time:SetText(FormatTime(elapsed))
+    timer.action:SetText(running and "STOP" or "START")
+    timer.action.accent = running and COLORS.red or COLORS.green
+    local accent = timer.action.accent
+    timer.action:SetBackdropBorderColor(accent[1], accent[2], accent[3], accent[4] or 1)
+
+    local tickSecond = running and math.floor(elapsed) or 0
+    local angle = (tickSecond % 60) / 60 * math.pi * 2 - math.pi / 2
+    timer.tick:ClearAllPoints()
+    timer.tick:SetPoint("CENTER", timer.iconFrame, "CENTER", math.cos(angle) * 9, math.sin(angle) * 9)
+end
+
+function UI:RefreshTimer()
+    if not self.timerFrame then return end
+    local running = Addon.RaidTargets and Addon.RaidTargets:IsRunning()
+    if running and not self.timerWasRunning then
+        self.timerDismissed = false
+        self.timerFrame:Show()
+    elseif running and not self.timerDismissed then
+        self.timerFrame:Show()
+    end
+    self.timerWasRunning = running and true or false
+    self:UpdateTimerDisplay()
+end
+
+function UI:ShowTimer()
+    self:CreateTimer()
+    if not self.timerFrame or not Addon.RaidTargets:CanControl() then return end
+    self.timerDismissed = false
+    self.timerFrame:Show()
+    self:UpdateTimerDisplay()
+end
+
+function UI:CreateTimer()
+    if self.timerFrame or not UIParent then return self.timerFrame end
+    local timer = CreateFrame("Frame", "ActuallyAssistTrackerTimer", UIParent)
+    timer:SetWidth(160)
+    timer:SetHeight(38)
+    timer:SetFrameStrata("DIALOG")
+    timer:SetClampedToScreen(true)
+    timer:SetMovable(true)
+    timer:EnableMouse(true)
+    timer:RegisterForDrag("LeftButton")
+    Addon.Util.SetBackdrop(timer, { 0.025, 0.035, 0.050, 0.97 }, { 0.20, 0.70, 0.90, 0.95 })
+    local saved = Addon.db and Addon.db.assistLog and Addon.db.assistLog.timerPosition
+    if type(saved) == "table" then
+        timer:SetPoint(saved.point or "CENTER", UIParent, saved.relativePoint or saved.point or "CENTER",
+            tonumber(saved.x) or 0, tonumber(saved.y) or 150)
+    else
+        timer:SetPoint("CENTER", UIParent, "CENTER", 0, 150)
+    end
+    timer:SetScript("OnDragStart", function(self) self:StartMoving() end)
+    timer:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        UI:SaveTimerPosition()
+    end)
+
+    local iconFrame = CreateFrame("Frame", nil, timer)
+    iconFrame:SetWidth(30); iconFrame:SetHeight(30)
+    iconFrame:SetPoint("LEFT", timer, "LEFT", 4, 0)
+    timer.iconFrame = iconFrame
+    local icon = iconFrame:CreateTexture(nil, "ARTWORK")
+    icon:SetAllPoints(iconFrame)
+    icon:SetTexture(TIMER_ICON)
+    icon:SetTexCoord(0.04, 0.96, 0.04, 0.96)
+    local tick = iconFrame:CreateTexture(nil, "OVERLAY")
+    tick:SetWidth(4); tick:SetHeight(4)
+    tick:SetTexture("Interface\\Buttons\\WHITE8X8")
+    tick:SetVertexColor(1.00, 0.90, 0.25, 1)
+    timer.tick = tick
+
+    local timeText = timer:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    timeText:SetPoint("LEFT", iconFrame, "RIGHT", 6, 0)
+    timeText:SetWidth(48)
+    timeText:SetJustifyH("LEFT")
+    timeText:SetText("00:00")
+    timeText:SetTextColor(0.92, 0.96, 1.00)
+    timer.time = timeText
+
+    local action = CreateFrame("Button", nil, timer)
+    StyleButton(action, "START", 43, COLORS.green)
+    action:SetHeight(20)
+    action:SetPoint("RIGHT", timer, "RIGHT", -19, 0)
+    action:SetScript("OnClick", function()
+        if Addon.RaidTargets:IsRunning() then
+            local fight, errorMessage = Addon.RaidTargets:Stop()
+            Addon:Print(fight and "Assist Tracker stopped. Waiting for raid uploads." or errorMessage)
+        else
+            local label = UI.frame and UI.frame.labelBox and UI.frame.labelBox:GetText() or "Raid fight"
+            local run, errorMessage = Addon.RaidTargets:Start(label)
+            Addon:Print(run and "Assist Tracker started." or errorMessage)
+        end
+        UI:RefreshTimer()
+    end)
+    timer.action = action
+
+    local close = CreateFrame("Button", nil, timer, "UIPanelCloseButton")
+    close:SetWidth(18); close:SetHeight(18)
+    close:SetPoint("RIGHT", timer, "RIGHT", 1, 0)
+    close:SetScript("OnClick", function()
+        UI.timerDismissed = true
+        timer:Hide()
+    end)
+    timer.close = close
+
+    timer.updateElapsed = 0
+    timer:SetScript("OnUpdate", function(self, elapsed)
+        self.updateElapsed = self.updateElapsed + elapsed
+        if self.updateElapsed < TIMER_UPDATE_INTERVAL then return end
+        self.updateElapsed = 0
+        UI:UpdateTimerDisplay()
+    end)
+    timer:Hide()
+    self.timerFrame = timer
+    self.timerWasRunning = false
+    self:RefreshTimer()
+    return timer
+end
+
 if StaticPopupDialogs then
     StaticPopupDialogs.ACTUALLY_ASSISTLOG_DELETE_FIGHT = {
-        text = "Delete the entire Assist Log fight '%s'?\n\nThis permanently removes every player's contribution from officer history.",
+        text = "Delete the entire Assist Tracker fight '%s'?\n\nThis permanently removes every player's contribution from officer history.",
         button1 = YES,
         button2 = NO,
         OnAccept = function()
@@ -173,7 +311,7 @@ function UI:Create()
 
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
     title:SetPoint("TOPLEFT", frame, "TOPLEFT", 84, -14)
-    title:SetText("Assist Log")
+    title:SetText("Assist Tracker")
     title:SetTextColor(COLORS.gold[1], COLORS.gold[2], COLORS.gold[3])
 
     local subtitle = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
@@ -213,7 +351,7 @@ function UI:Create()
     start:SetScript("OnClick", function()
         local run, errorMessage = Addon.RaidTargets:Start(labelBox:GetText())
         if not run then Addon:Print(errorMessage); return end
-        Addon:Print("Assist Log started. Raid addon users are recording their selected targets.")
+        Addon:Print("Assist Tracker started. Raid addon users are recording their selected targets.")
         UI.view = "active"
         UI:Refresh()
     end)
@@ -225,7 +363,7 @@ function UI:Create()
     stop:SetScript("OnClick", function()
         local fight, errorMessage = Addon.RaidTargets:Stop()
         if not fight then Addon:Print(errorMessage); return end
-        Addon:Print("Assist Log stopped. Waiting for raid uploads.")
+        Addon:Print("Assist Tracker stopped. Waiting for raid uploads.")
         UI.selectedFightID = fight.id
         UI.view = "fight"
         UI:Refresh()
@@ -453,7 +591,7 @@ end
 
 function UI:ShowActive()
     local run = Addon.RaidTargets:GetActiveRun()
-    if not run then self:AddRow("No Assist Log is recording.", nil, COLORS.muted); return end
+    if not run then self:AddRow("No Assist Tracker is recording.", nil, COLORS.muted); return end
     self:AddRow("RECORDING  " .. FightLabel(run), nil, COLORS.green, "header")
     self:AddRow("Controller: " .. tostring(run.officer) .. "     Shot caller: "
         .. tostring(run.caller or run.officer) .. "     Elapsed: " .. FormatTime(GetTime() - run.startedAt))
@@ -614,6 +752,7 @@ end
 
 function UI:OnDataChanged()
     if self.frame and self.frame:IsShown() then self:Refresh() end
+    self:RefreshTimer()
 end
 
 function UI:Show()

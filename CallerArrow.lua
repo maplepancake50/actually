@@ -12,6 +12,9 @@ local MAP_REFRESH_INTERVAL = 1
 local DEFAULT_MAP_ASPECT = 1.5
 local CALLER_PROTOCOL = 1
 local CALLER_KIND = "SC"
+local DEFAULT_ARROW_SIZE = 110
+local MIN_ARROW_SIZE = 72
+local MAX_ARROW_SIZE = 180
 
 local function PlayerKey(identity)
     return Addon.Util.NormalizeCharacter(identity)
@@ -91,28 +94,25 @@ function CallerArrow:Create()
     if self.frame then return self.frame end
 
     local frame = CreateFrame("Button", "ActuallyCallerArrowFrame", UIParent)
-    frame:SetWidth(190)
-    frame:SetHeight(112)
     frame:SetFrameStrata("HIGH")
     frame:SetMovable(true)
     frame:SetClampedToScreen(true)
     frame:EnableMouse(true)
     frame:RegisterForDrag("LeftButton")
     frame:RegisterForClicks("RightButtonUp")
-    Addon.Util.SetBackdrop(frame, { 0.015, 0.025, 0.045, 0.88 }, { 0.12, 0.72, 0.92, 0.92 })
+    frame:EnableMouseWheel(true)
 
     local arrow = frame:CreateTexture(nil, "ARTWORK")
     arrow:SetTexture("Interface\\Minimap\\MinimapArrow")
-    arrow:SetWidth(68)
-    arrow:SetHeight(68)
-    arrow:SetPoint("TOP", frame, "TOP", 0, -6)
-    arrow:SetBlendMode("ADD")
+    arrow:SetPoint("TOP", frame, "TOP", 0, 0)
+    arrow:SetBlendMode("BLEND")
+    arrow:SetAlpha(1)
     arrow:SetVertexColor(0.15, 0.86, 1, 1)
     frame.arrow = arrow
 
     local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    title:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 8, 9)
-    title:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -8, 9)
+    title:SetPoint("TOPLEFT", arrow, "BOTTOMLEFT", -6, 3)
+    title:SetPoint("TOPRIGHT", arrow, "BOTTOMRIGHT", 6, 3)
     title:SetJustifyH("CENTER")
     title:SetTextColor(0.82, 0.94, 1)
     frame.title = title
@@ -126,20 +126,81 @@ function CallerArrow:Create()
     end)
     frame:SetScript("OnClick", function(_, button)
         if button == "RightButton" then
-            CallerArrow:SetEnabled(false)
+            CallerArrow:ShowMenu()
         end
     end)
-    frame:SetScript("OnEnter", function(owner)
-        GameTooltip:SetOwner(owner, "ANCHOR_BOTTOM")
-        GameTooltip:SetText("Shot Caller Pointer", 0.24, 0.86, 1)
-        GameTooltip:AddLine("Drag to move. Right-click to turn the Cache Utility option off.", 0.8, 0.8, 0.8, true)
-        GameTooltip:Show()
+    frame:SetScript("OnMouseWheel", function(_, delta)
+        CallerArrow:SetArrowSize(CallerArrow:GetArrowSize() + (delta > 0 and 10 or -10))
     end)
-    frame:SetScript("OnLeave", function() GameTooltip:Hide() end)
     self.frame = frame
+    self.menuFrame = CreateFrame("Frame", "ActuallyCallerArrowMenu", UIParent, "UIDropDownMenuTemplate")
+    self:SetArrowSize(Addon.db.callerArrow and Addon.db.callerArrow.size or DEFAULT_ARROW_SIZE)
     self:RestorePosition()
     frame:Hide()
     return frame
+end
+
+function CallerArrow:GetArrowSize()
+    return tonumber(Addon.db and Addon.db.callerArrow and Addon.db.callerArrow.size)
+        or DEFAULT_ARROW_SIZE
+end
+
+function CallerArrow:SetArrowSize(size)
+    size = math.max(MIN_ARROW_SIZE, math.min(MAX_ARROW_SIZE,
+        math.floor((tonumber(size) or DEFAULT_ARROW_SIZE) + 0.5)))
+    Addon.db.callerArrow = type(Addon.db.callerArrow) == "table" and Addon.db.callerArrow or {}
+    Addon.db.callerArrow.size = size
+    if self.frame then
+        self.frame:SetWidth(size + 12)
+        self.frame:SetHeight(size + 17)
+        self.frame.arrow:SetWidth(size)
+        self.frame.arrow:SetHeight(size)
+    end
+    return size
+end
+
+function CallerArrow:ShowMenu()
+    if not self.menuFrame or not EasyMenu then return end
+    local current = self:GetArrowSize()
+    local sizes = {
+        { text = "Small", value = 80 },
+        { text = "Medium", value = 110 },
+        { text = "Large", value = 140 },
+        { text = "Extra Large", value = 180 },
+    }
+    local menu = {
+        { text = "Shot Caller", isTitle = true, notCheckable = true },
+    }
+    for _, choice in ipairs(sizes) do
+        local value = choice.value
+        table.insert(menu, {
+            text = choice.text,
+            checked = math.abs(current - value) < 5,
+            func = function() CallerArrow:SetArrowSize(value) end,
+        })
+    end
+    table.insert(menu, {
+        text = "Hide", notCheckable = true,
+        func = function() CallerArrow:SetEnabled(false) end,
+    })
+    EasyMenu(menu, self.menuFrame, "cursor", 0, 0, "MENU", 2)
+end
+
+function CallerArrow:UpdateDeathState(dead)
+    dead = dead and true or false
+    if self.targetDead == dead then return end
+    self.targetDead = dead
+    if not self.frame then return end
+    if dead then
+        self.frame.arrow:Hide()
+        self.frame.title:SetTextColor(1.00, 0.28, 0.24)
+        self.frame.title:SetText("SHOT CALLER - DEAD")
+    else
+        self.frame.arrow:Show()
+        self.frame.arrow:SetVertexColor(0.15, 0.86, 1.00, 1)
+        self.frame.title:SetTextColor(0.82, 0.94, 1.00)
+        self.frame.title:SetText("SHOT CALLER")
+    end
 end
 
 function CallerArrow:RestorePosition()
@@ -320,16 +381,18 @@ function CallerArrow:OnUpdate(elapsed)
     self.elapsed = 0
 
     if not self:RefreshVisibility() then return end
+    local dead = UnitIsDeadOrGhost and UnitIsDeadOrGhost(self.unit)
+    self:UpdateDeathState(dead)
     local playerX, playerY, targetX, targetY = self:ReadPositions()
     if not playerX then
-        self:Hide()
+        if dead then self.frame:Show() else self:Hide() end
         return
     end
 
     local deltaX = (targetX - playerX) * MapAspect()
     local deltaY = targetY - playerY
     if math.abs(deltaX) < 0.000001 and math.abs(deltaY) < 0.000001 then
-        self:Hide()
+        if dead then self.frame:Show() else self:Hide() end
         return
     end
 
@@ -342,7 +405,6 @@ function CallerArrow:OnUpdate(elapsed)
     end
     local relativeAngle = (direction - facing) % TWO_PI
     RotateTexture(self.frame.arrow, relativeAngle)
-    self.frame.title:SetText("SHOT CALLER: " .. tostring(self.targetName))
     self.frame:Show()
 end
 

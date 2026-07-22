@@ -6,7 +6,7 @@ local Util = Addon.Util or {}
 Addon.Util = Util
 
 Addon.name = addonName or "actually"
-Addon.version = "0.2.6"
+Addon.version = "0.2.13"
 Addon.MESSAGE_PREFIX = "ACTUALLY"
 Addon.tierOrder = { "S", "A", "B", "C", "D", "U" }
 Addon.DEFAULT_PERSONAL_LIST_NAME = "My Tier List"
@@ -74,6 +74,7 @@ local defaults = {
         pendingUploads = {},
         activeParticipantRuns = {},
         deletedFights = {},
+        timerPosition = { point = "CENTER", relativePoint = "CENTER", x = 0, y = 150 },
     },
     focusAssignments = {
         targetsText = "",
@@ -87,6 +88,7 @@ local defaults = {
         enabled = false,
         x = 0,
         y = -145,
+        size = 110,
     },
     cacheTips = {
         healer = "",
@@ -347,6 +349,9 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
     if Addon.RaidTargets then
         Addon.RaidTargets:Initialize()
     end
+    if Addon.AssistLogUI and Addon.AssistLogUI.CreateTimer then
+        Addon.AssistLogUI:CreateTimer()
+    end
     if Addon.CallerArrow then
         Addon.CallerArrow:Initialize()
     end
@@ -398,13 +403,17 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
             Addon.Backups:HandleCommand("")
         elseif string.sub(lowerMessage, 1, 7) == "backup " and Addon.Backups then
             Addon.Backups:HandleCommand(string.sub(rawMessage, 8))
-        elseif lowerMessage == "assistlog" and Addon.AssistLogUI then
+        elseif (lowerMessage == "assisttracker" or lowerMessage == "assist tracker") and Addon.AssistLogUI then
             Addon.AssistLogUI:Show()
         elseif (lowerMessage == "focus" or lowerMessage == "focusassign") and Addon.FocusAssignments then
             Addon.FocusAssignments:Toggle()
-        elseif string.sub(lowerMessage, 1, 10) == "assistlog " and Addon.RaidTargets then
-            if not Addon.RaidTargets:HandleCommand(string.sub(rawMessage, 11)) then
-                Addon:Print("Assist Tracker: start [fight], stop, toggle [fight], caller <player|target|me>, pending [retry|clear]")
+        elseif string.sub(lowerMessage, 1, 14) == "assisttracker " and Addon.RaidTargets then
+            if not Addon.RaidTargets:HandleCommand(string.sub(rawMessage, 15)) then
+                Addon:Print("Assist Tracker: start [fight], stop, toggle [fight], timer, caller <player|target|me>, pending [retry|clear]")
+            end
+        elseif string.sub(lowerMessage, 1, 15) == "assist tracker " and Addon.RaidTargets then
+            if not Addon.RaidTargets:HandleCommand(string.sub(rawMessage, 16)) then
+                Addon:Print("Assist Tracker: start [fight], stop, toggle [fight], timer, caller <player|target|me>, pending [retry|clear]")
             end
         elseif (lowerMessage == "caller" or lowerMessage == "shotcaller") and Addon.RaidTargets then
             Addon.RaidTargets:HandleCommand("caller")

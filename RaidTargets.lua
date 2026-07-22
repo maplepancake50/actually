@@ -25,7 +25,7 @@ local UPDATE_INTERVAL = 0.10
 local KIND = "AL"
 local PROTOCOL = 2
 local NO_TARGET = "(no target)"
--- Same checksummed/chunked envelope as Sync.lua. The Assist Log header also
+-- Same checksummed/chunked envelope as Sync.lua. The Assist Tracker header also
 -- carries a run ID, so its data chunk is slightly smaller to stay <240 bytes.
 local TRANSFER_CHUNK_SIZE = 150
 local TRANSFER_RETRY_SECONDS = 10
@@ -94,7 +94,7 @@ local function TransportLog(message)
         return
     end
     if Addon.Sync and Addon.Sync.Log then
-        Addon.Sync:Log("Assist Log: " .. tostring(message))
+        Addon.Sync:Log("Assist Tracker: " .. tostring(message))
     end
 end
 
@@ -457,7 +457,7 @@ end
 
 function RaidTargets:SetSelectedCaller(specification)
     if not self:CanControl() then
-        return nil, "Only an actually officer can choose the Assist Log shot caller."
+        return nil, "Only an actually officer can choose the Assist Tracker shot caller."
     end
     local value = Addon.Util.Trim(specification)
     local lowered = string.lower(value)
@@ -467,7 +467,7 @@ function RaidTargets:SetSelectedCaller(specification)
         value = UnitName and UnitName("player") or ""
     end
     if value == "" then
-        return nil, "Usage: /actually assistlog caller <raid player|target|me>"
+        return nil, "Usage: /actually assisttracker caller <raid player|target|me>"
     end
     local member = FindRaidMember(value)
     if not member then
@@ -491,7 +491,7 @@ function RaidTargets:HandleCommand(arguments)
     command = string.lower(command or "")
     if command == "start" then
         local run, errorMessage = self:Start(rest ~= "" and rest or "Raid fight")
-        Addon:Print(run and "Assist Tracker started. Use /actually assistlog stop when the fight is over."
+        Addon:Print(run and "Assist Tracker started. Use /actually assisttracker stop when the fight is over."
             or errorMessage)
         return true
     elseif command == "stop" then
@@ -537,17 +537,20 @@ function RaidTargets:HandleCommand(arguments)
                 .. " (dormant: " .. tostring(dormant) .. ", too large: " .. tostring(failed) .. ").")
         end
         return true
+    elseif command == "timer" then
+        if Addon.AssistLogUI and Addon.AssistLogUI.ShowTimer then Addon.AssistLogUI:ShowTimer() end
+        return true
     elseif command ~= "caller" then
         return false
     end
     if rest == "" then
-        Addon:Print("Assist Log shot caller: " .. tostring(self:GetSelectedCaller())
-            .. ". Set with /actually assistlog caller <raid player|target|me>.")
+        Addon:Print("Assist Tracker shot caller: " .. tostring(self:GetSelectedCaller())
+            .. ". Set with /actually assisttracker caller <raid player|target|me>.")
         return true
     end
     local caller, errorMessage = self:SetSelectedCaller(rest)
     if caller then
-        Addon:Print("Assist Log shot caller set to " .. caller .. ".")
+        Addon:Print("Assist Tracker shot caller set to " .. caller .. ".")
     else
         Addon:Print(errorMessage)
     end
@@ -583,18 +586,18 @@ end
 
 function RaidTargets:Start(label)
     if self.activeOfficerRun then
-        return nil, "An assist log is already running."
+        return nil, "An Assist Tracker session is already running."
     end
     if not GetNumRaidMembers or GetNumRaidMembers() == 0 then
-        return nil, "Assist Log can only start while you are in a raid."
+        return nil, "Assist Tracker can only start while you are in a raid."
     end
     local ownName = UnitName and UnitName("player")
     if not self:CanControl() then
-        return nil, "Only an actually officer can start Assist Log."
+        return nil, "Only an actually officer can start Assist Tracker."
     end
     local callerName = FindRaidMember(self:GetSelectedCaller())
     if not callerName then
-        return nil, "The selected shot caller is not in this raid. Set one with /actually assistlog caller <player|target|me>."
+        return nil, "The selected shot caller is not in this raid. Set one with /actually assisttracker caller <player|target|me>."
     end
 
     label = string.sub(Addon.Util.Trim(label), 1, 60)
@@ -641,7 +644,7 @@ end
 function RaidTargets:Stop()
     local run = self.activeOfficerRun
     if not run then
-        return nil, "No assist log is running."
+        return nil, "No Assist Tracker session is running."
     end
     CaptureLocalChange(run)
     run.stoppedAt = Now()
@@ -717,7 +720,7 @@ end
 
 function RaidTargets:ClearHistory()
     if self.activeOfficerRun then
-        return nil, "Stop the active assist log before clearing history."
+        return nil, "Stop the active Assist Tracker session before clearing history."
     end
     for _, fight in ipairs(Addon.db.assistLog.fights or {}) do
         self:TombstoneFight(fight)
@@ -928,7 +931,7 @@ function RaidTargets:QueueUpload(run)
         upload.failedReason = "Timeline exceeds the transfer limit."
         if self:CanControl() then
             Addon:Print("An Assist Tracker timeline was too large to upload and remains saved locally."
-                .. " Use /actually assistlog pending to inspect pending data.")
+                .. " Use /actually assisttracker pending to inspect pending data.")
         end
     end
     Addon.db.assistLog.pendingUploads[run.id] = upload
@@ -1329,7 +1332,7 @@ function RaidTargets:OnUpdate(elapsed)
         if Now() >= run.nextReminderAt then
             local minutes = math.max(5, math.floor((Now() - startedAt) / 60))
             Addon:Print("Assist Tracker is still recording (" .. tostring(minutes)
-                .. " minutes). Stop it with /actually assistlog stop when the fight is over.")
+                .. " minutes). Stop it with /actually assisttracker stop when the fight is over.")
             run.nextReminderAt = Now() + REMINDER_INTERVAL
         end
     end
