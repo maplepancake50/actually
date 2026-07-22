@@ -23,3 +23,29 @@ FocusAssignmentsUI.lua
 MinimapButton.lua
 Pet.lua
 BuildAnalyzer.lua
+
+# Ascension Cooldowns module dependencies
+Lib\LibStub.lua
+Lib\CallbackHandler-1.0.lua
+Lib\AceTimer-3.0.lua
+Lib\AceComm-3.0\ChatThrottleLib.lua
+Lib\AceComm-3.0\AceComm-3.0.lua
+Lib\AceSerializer-3.0.lua
+
+# Ascension Cooldowns module
+Modules\AscensionCooldowns\Constants.lua
+Modules\AscensionCooldowns\Defaults.lua
+Modules\AscensionCooldowns\Registry.lua
+Modules\AscensionCooldowns\SpellInfo.lua
+Modules\AscensionCooldowns\State.lua
+Modules\AscensionCooldowns\Roster.lua
+Modules\AscensionCooldowns\Spellbook.lua
+Modules\AscensionCooldowns\CooldownReader.lua
+Modules\AscensionCooldowns\Comms.lua
+Modules\AscensionCooldowns\CombatLog.lua
+Modules\AscensionCooldowns\Renderer.lua
+Modules\AscensionCooldowns\TestUI.lua
+Modules\AscensionCooldowns\SpoofTest.lua
+Modules\AscensionCooldowns\TestMode.lua
+Modules\AscensionCooldowns\Debug.lua
+Modules\AscensionCooldowns\Init.lua
