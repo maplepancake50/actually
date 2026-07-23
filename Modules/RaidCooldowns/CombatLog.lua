@@ -28,6 +28,12 @@ function CombatLog:OnEvent(...)
     local target = entry.notarget and nil or destName
     local playerGUID = UnitGUID and UnitGUID("player")
     if sourceGUID and playerGUID and sourceGUID == playerGUID then
+        if ARC.Requests and ARC.Requests.initialized then
+            ARC.Requests:OnLocalCast(canonicalID)
+        end
+        if ARC.Bundles and ARC.Bundles.initialized then
+            ARC.Bundles:OnLocalCast(canonicalID)
+        end
         ARC.CooldownReader:OnLocalCast(canonicalID, target)
         return
     end
@@ -35,5 +41,11 @@ function CombatLog:OnEvent(...)
     local identity = ARC.Roster:FindGUID(sourceGUID)
     if not identity and sourceName then identity = ARC.Roster:FindSender(sourceName) end
     if not identity then return end
+    if ARC.Requests and ARC.Requests.initialized then
+        ARC.Requests:OnReportedCast(identity.key, canonicalID)
+    end
+    if ARC.Bundles and ARC.Bundles.initialized then
+        ARC.Bundles:OnReportedCast(identity.key, canonicalID)
+    end
     ARC.State:ObserveCast(identity.key, identity, canonicalID, target)
 end

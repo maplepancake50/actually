@@ -11,6 +11,8 @@ ARC.Defaults = {
             point = "CENTER",
             x = 0,
             y = 0,
+            scale = 1,
+            locked = true,
         },
         spoofUI = {
             point = "CENTER",
@@ -23,6 +25,29 @@ ARC.Defaults = {
             x = 0,
             y = 0,
         },
+        requests = {
+            timeout = 8,
+            sound = true,
+            autoFailover = true,
+        },
+        requestUI = {
+            point = "CENTER",
+            x = 0,
+            y = 140,
+        },
+        bundleAlertUI = {
+            point = "CENTER",
+            x = 0,
+            y = 150,
+        },
+        bundleUI = {
+            point = "CENTER",
+            x = 0,
+            y = 0,
+            scale = 1,
+            locked = true,
+        },
+        cooldownBundles = {},
         spells = {},
         frames = {
             updateInterval = 0.1,

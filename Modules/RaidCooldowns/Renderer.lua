@@ -112,6 +112,8 @@ function Renderer:OnUpdate(elapsed)
     if ARC.State:ExpireRemoteReports() and ARC.Comms.initialized then
         ARC.Comms:RequestState(false)
     end
+    if ARC.Requests and ARC.Requests.initialized then ARC.Requests:OnUpdate(now) end
+    if ARC.Bundles and ARC.Bundles.initialized then ARC.Bundles:OnUpdate(now) end
 end
 
 function Renderer:CountRows()

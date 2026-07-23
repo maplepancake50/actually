@@ -289,7 +289,7 @@ function Debug:FindHiddenTalents()
 end
 
 function Debug:Help()
-    ARC:Print("commands: config, ui, spoof, probe, apiprobe <id>, findhidden, scan, state, peers, request, test, debug, dumpbook [filter], dumptalents [filter]")
+    ARC:Print("commands: config, bundles, ui, spoof, probe, apiprobe <id>, findhidden, scan, state, peers, request, test, debug, dumpbook [filter], dumptalents [filter]")
 end
 
 function Debug:Handle(input)
@@ -301,6 +301,12 @@ function Debug:Handle(input)
             ARC.SpellConfig:Toggle()
         else
             ARC:Print("SpellConfig unavailable; fully restart the game client")
+        end
+    elseif command == "bundles" then
+        if ARC.BundleConfig and ARC.BundleConfig.Toggle then
+            ARC.BundleConfig:Toggle()
+        else
+            ARC:Print("BundleConfig unavailable; fully restart the game client")
         end
     elseif command == "ui" then
         local shown = ARC.TestUI:Toggle()

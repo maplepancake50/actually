@@ -145,6 +145,12 @@ function State:ApplyCast(playerKey, identity, session, sequence, canonicalID, va
         self.lastEffectiveDuration[canonicalID] = player.spells[canonicalID].duration
     end
     self:Changed("cast report")
+    if ARC.Requests and ARC.Requests.initialized then
+        ARC.Requests:OnReportedCast(playerKey, canonicalID)
+    end
+    if ARC.Bundles and ARC.Bundles.initialized then
+        ARC.Bundles:OnReportedCast(playerKey, canonicalID)
+    end
     return true
 end
 

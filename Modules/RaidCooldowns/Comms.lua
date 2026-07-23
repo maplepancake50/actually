@@ -6,6 +6,10 @@ local function validInteger(value, minimum, maximum)
         and value >= minimum and value <= maximum
 end
 
+local function validString(value, maximum)
+    return type(value) == "string" and #value > 0 and #value <= maximum
+end
+
 function Comms:Initialize()
     self.session = tostring(time and time() or 0) .. ":" .. tostring(math.random(100000, 999999))
     self.sequence = 0
@@ -86,6 +90,38 @@ function Comms:SendCast(canonicalID, value, target)
         remaining, duration, target)
 end
 
+function Comms:SendUseRequest(requestID, targetKey, canonicalID, timeout)
+    return self:Send("USE_REQ", "ALERT", self.session, self:NextSequence(), requestID,
+        targetKey, canonicalID, math.floor(timeout * 10 + 0.5))
+end
+
+function Comms:SendUseStatus(requestID, status, canonicalID)
+    return self:Send("USE_STATUS", "ALERT", self.session, self:NextSequence(),
+        requestID, status, canonicalID)
+end
+
+function Comms:SendUseCancel(requestID, targetKey)
+    return self:Send("USE_CANCEL", "ALERT", self.session, self:NextSequence(),
+        requestID, targetKey)
+end
+
+function Comms:SendBundleRequest(bundleID, bundleName, itemID, targetKey, canonicalID, timeout)
+    if #bundleName > 60 then bundleName = string.sub(bundleName, 1, 60) end
+    return self:Send("BUNDLE_REQ", "ALERT", self.session, self:NextSequence(),
+        bundleID, bundleName, itemID, targetKey, canonicalID,
+        math.floor(timeout * 10 + 0.5))
+end
+
+function Comms:SendBundleStatus(bundleID, itemID, status, canonicalID)
+    return self:Send("BUNDLE_STATUS", "ALERT", self.session, self:NextSequence(),
+        bundleID, itemID, status, canonicalID)
+end
+
+function Comms:SendBundleCancel(itemID, targetKey)
+    return self:Send("BUNDLE_CANCEL", "ALERT", self.session, self:NextSequence(),
+        itemID, targetKey)
+end
+
 function Comms:SchedulePeriodicReport()
     local delay = math.random(25, 35)
     self.periodicTimer = ARC:ScheduleTimer(function()
@@ -164,5 +200,49 @@ function Comms:OnCommReceived(prefix, message, distribution, sender)
             duration = durationTenths / 10,
             target = target,
         })
+    elseif messageType == "USE_REQ" then
+        local requestID, targetKey = decoded[6], decoded[7]
+        local canonicalID = ARC.Registry:Canonicalize(decoded[8])
+        local timeoutTenths = decoded[9]
+        if not validString(requestID, 120) or not validString(targetKey, 100)
+            or not canonicalID or not validInteger(timeoutTenths, 30, 300) then return end
+        ARC.Requests:OnRemoteRequest(identity, session, sequence, requestID,
+            targetKey, canonicalID, timeoutTenths / 10)
+    elseif messageType == "USE_STATUS" then
+        local requestID, status = decoded[6], decoded[7]
+        local canonicalID = ARC.Registry:Canonicalize(decoded[8])
+        local allowed = status == "ACK" or status == "CAST" or status == "DECLINED"
+            or status == "DEAD" or status == "OFFLINE" or status == "UNAVAILABLE"
+            or status == "BUSY" or status == "TIMEOUT"
+        if not validString(requestID, 120) or not allowed or not canonicalID then return end
+        ARC.Requests:OnRemoteStatus(identity, session, sequence, requestID, status, canonicalID)
+    elseif messageType == "USE_CANCEL" then
+        local requestID, targetKey = decoded[6], decoded[7]
+        if not validString(requestID, 120) or not validString(targetKey, 100) then return end
+        ARC.Requests:OnRemoteCancel(identity, session, sequence, requestID, targetKey)
+    elseif messageType == "BUNDLE_REQ" then
+        local bundleID, bundleName, itemID, targetKey = decoded[6], decoded[7], decoded[8], decoded[9]
+        local canonicalID = ARC.Registry:Canonicalize(decoded[10])
+        local timeoutTenths = decoded[11]
+        if not validString(bundleID, 120) or not validString(bundleName, 60)
+            or not validString(itemID, 140) or not validString(targetKey, 100)
+            or not canonicalID or not validInteger(timeoutTenths, 30, 300) then return end
+        ARC.Bundles:OnRemoteRequest(identity, session, sequence, bundleID, bundleName,
+            itemID, targetKey, canonicalID, timeoutTenths / 10)
+    elseif messageType == "BUNDLE_STATUS" then
+        local bundleID, itemID, status = decoded[6], decoded[7], decoded[8]
+        local canonicalID = ARC.Registry:Canonicalize(decoded[9])
+        local allowed = status == "ACK" or status == "ACTIVE" or status == "QUEUED"
+            or status == "CAST" or status == "DECLINED"
+            or status == "DEAD" or status == "OFFLINE" or status == "UNAVAILABLE"
+            or status == "BUSY" or status == "TIMEOUT"
+        if not validString(bundleID, 120) or not validString(itemID, 140)
+            or not allowed or not canonicalID then return end
+        ARC.Bundles:OnRemoteStatus(identity, session, sequence, bundleID,
+            itemID, status, canonicalID)
+    elseif messageType == "BUNDLE_CANCEL" then
+        local itemID, targetKey = decoded[6], decoded[7]
+        if not validString(itemID, 140) or not validString(targetKey, 100) then return end
+        ARC.Bundles:OnRemoteCancel(identity, session, sequence, itemID, targetKey)
     end
 end

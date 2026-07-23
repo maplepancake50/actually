@@ -44,6 +44,9 @@ Modules\RaidCooldowns\CooldownReader.lua
 Modules\RaidCooldowns\Comms.lua
 Modules\RaidCooldowns\CombatLog.lua
 Modules\RaidCooldowns\Renderer.lua
+Modules\RaidCooldowns\Requests.lua
+Modules\RaidCooldowns\Bundles.lua
+Modules\RaidCooldowns\BundleConfig.lua
 Modules\RaidCooldowns\SpellConfig.lua
 Modules\RaidCooldowns\TestUI.lua
 Modules\RaidCooldowns\SpoofTest.lua

@@ -53,6 +53,8 @@ function ARC:Initialize()
     self.CooldownReader:Initialize()
     self.Renderer:Initialize()
     self.Comms:Initialize()
+    self.Requests:Initialize()
+    self.Bundles:Initialize()
     self.Spellbook:StartGroupedFallbackScans()
     self.DebugCommands:RegisterSlashCommands()
 
@@ -61,6 +63,7 @@ function ARC:Initialize()
     self.initialized = true
     self.initializing = false
     initializeOptional("SpellConfig")
+    initializeOptional("BundleConfig")
     initializeOptional("TestUI")
     initializeOptional("SpoofTest")
     self:Print("loaded; /arc for commands")
@@ -94,6 +97,11 @@ function Events.SPELL_UPDATE_COOLDOWN()
     ARC.CooldownReader:ScheduleRefresh(0.08, "cooldown event")
 end
 
+function Events.PLAYER_DEAD()
+    ARC.Requests:OnPlayerDeath()
+    ARC.Bundles:OnPlayerDeath()
+end
+
 function Events.COMBAT_LOG_EVENT_UNFILTERED(...)
     ARC.CombatLog:OnEvent(...)
 end
@@ -105,10 +113,21 @@ local function rosterChanged()
     ARC.Comms:ScheduleState(0.5, "roster")
 end
 
+local function unitStatusChanged(unit)
+    if not unit or not UnitExists(unit) then return end
+    local identity = ARC.Roster:FindGUID(UnitGUID and UnitGUID(unit))
+    if not identity then return end
+    local connected = not UnitIsConnected or UnitIsConnected(unit) and true or false
+    local dead = UnitIsDeadOrGhost and UnitIsDeadOrGhost(unit) and true or false
+    if identity.connected ~= connected or identity.dead ~= dead then rosterChanged() end
+end
+
 Events.RAID_ROSTER_UPDATE = rosterChanged
 Events.PARTY_MEMBERS_CHANGED = rosterChanged
 Events.UPDATE_BATTLEFIELD_STATUS = rosterChanged
 Events.ZONE_CHANGED_NEW_AREA = rosterChanged
+Events.UNIT_CONNECTION = unitStatusChanged
+Events.UNIT_FLAGS = unitStatusChanged
 
 ARC.eventFrame = CreateFrame("Frame")
 for event in pairs(Events) do ARC.eventFrame:RegisterEvent(event) end
