@@ -587,7 +587,10 @@ function RaidCC:UpdateArrow(state)
         and UnitExists(state.unit)
         and UnitGUID(state.unit) == state.guid
         and self.raidGUIDs[state.guid] == true
-    local hasCC, kind, spellName, spellID = valid and self:HasTrackedCC(state.unit)
+    local hasCC, kind, spellName, spellID
+    if valid then
+        hasCC, kind, spellName, spellID = self:HasTrackedCC(state.unit)
+    end
     if hasCC then
         local color = CC_ARROW_COLORS[kind] or { 1, 1, 1 }
         state.overlay.arrow:SetVertexColor(color[1], color[2], color[3], 1)
