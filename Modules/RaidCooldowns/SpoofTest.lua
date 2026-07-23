@@ -136,7 +136,7 @@ function SpoofTest:Initialize()
 
     frame.title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     frame.title:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -10)
-    frame.title:SetText("ARC Spoof Test")
+    frame.title:SetText("ARC Spoof Test - " .. ARC.Constants.WIP_TEXT)
 
     frame.durationLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     frame.durationLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -37)

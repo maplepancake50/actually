@@ -14,6 +14,7 @@ Addon.RaidCooldowns = ARC
 ARC.Constants = {
     MODULE_NAME = "RaidCooldowns",
     DISPLAY_NAME = "Actually Raid Cooldowns",
+    WIP_TEXT = "|cffff9f1aWORK IN PROGRESS|r",
     GLOBAL_TABLE = "Actually.Modules.RaidCooldowns",
     SAVED_VARIABLES = "ActuallyDB",
     COMM_PREFIX = "ARC",

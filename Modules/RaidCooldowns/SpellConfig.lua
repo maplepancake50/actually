@@ -214,7 +214,7 @@ function SpellConfig:Initialize()
 
     frame.title = frame.headerContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
     frame.title:SetPoint("TOPLEFT", frame.headerContent, "TOPLEFT", 14, -10)
-    frame.title:SetText("Actually Raid Cooldowns")
+    frame.title:SetText("Actually Raid Cooldowns - " .. ARC.Constants.WIP_TEXT)
     frame.title:SetTextColor(0.92, 0.96, 1.00)
 
     frame.subtitle = frame.headerContent:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")

@@ -41,6 +41,7 @@ function Renderer:BuildRow(playerKey, player, spellID, spell, now)
         key = tostring(playerKey) .. ":" .. tostring(spellID),
         playerKey = playerKey,
         playerName = player.name or tostring(playerKey),
+        source = player.source,
         unit = player.unit,
         dead = player.dead,
         connected = player.connected,

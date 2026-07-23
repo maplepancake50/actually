@@ -6,6 +6,23 @@ local MAX_ROWS = 30
 local MIN_SCALE = 0.65
 local MAX_SCALE = 1.80
 
+local function applyLockIcon(button, locked)
+    local state = locked and "Locked" or "Unlocked"
+    button:SetText("")
+    button:SetNormalTexture("Interface\\Buttons\\LockButton-" .. state .. "-Up")
+    button:SetPushedTexture("Interface\\Buttons\\LockButton-" .. state .. "-Down")
+    button:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
+end
+
+local function showLockTooltip(button, locked)
+    if not GameTooltip then return end
+    GameTooltip:SetOwner(button, "ANCHOR_RIGHT")
+    GameTooltip:SetText(locked and "Cooldown window locked" or "Cooldown window unlocked")
+    GameTooltip:AddLine(locked and "Click to unlock movement and resizing."
+        or "Click to lock movement and resizing.", 0.35, 1.00, 0.35)
+    GameTooltip:Show()
+end
+
 local function clamp(value, minimum, maximum)
     return math.max(minimum, math.min(maximum, value))
 end
@@ -25,15 +42,13 @@ function TestUI:ApplyLayoutLock()
     local frame, profile = self.frame, ARC.db.profile.testUI
     if not frame then return end
     local locked = profile.locked ~= false
-    frame.lock:SetText(locked and "Unlock" or "Lock")
+    applyLockIcon(frame.lock, locked)
     if locked then
         frame.resizeGrip:Hide()
-        frame.unlockHint:Hide()
         frame:SetBackdropColor(0.02, 0.035, 0.055, 0.58)
         frame:SetBackdropBorderColor(0.12, 0.34, 0.46, 0.85)
     else
         frame.resizeGrip:Show()
-        frame.unlockHint:Show()
         frame:SetBackdropColor(0.03, 0.055, 0.085, 0.78)
         frame:SetBackdropBorderColor(0.24, 0.86, 1.00, 1)
     end
@@ -61,7 +76,6 @@ function TestUI:BeginScaleResize()
         nextScale = clamp(nextScale, MIN_SCALE, MAX_SCALE)
         frame:SetScale(nextScale)
         profile.scale = nextScale
-        frame.scaleText:SetText(string.format("%d%%", math.floor(nextScale * 100 + 0.5)))
     end)
 end
 
@@ -122,7 +136,7 @@ function TestUI:Initialize()
     self.widgets = {}
     local profile = ARC.db.profile.testUI
     local frame = CreateFrame("Frame", "ActuallyARCTestFrame", UIParent)
-    frame:SetWidth(420)
+    frame:SetWidth(340)
     frame:SetHeight(51)
     frame:SetPoint(profile.point or "CENTER", UIParent, profile.point or "CENTER", profile.x or 0, profile.y or 0)
     frame:SetFrameStrata("DIALOG")
@@ -147,13 +161,22 @@ function TestUI:Initialize()
 
     frame.title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     frame.title:SetPoint("TOPLEFT", frame, "TOPLEFT", 8, -8)
-    frame.title:SetText("Actually Raid Cooldowns")
+    frame.title:SetText("Actually Raid Cooldowns - " .. ARC.Constants.WIP_TEXT)
 
-    frame.lock = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    frame.lock:SetWidth(52)
-    frame.lock:SetHeight(18)
-    frame.lock:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -7, -5)
-    frame.lock:SetScript("OnClick", function() self:ToggleLayoutLock() end)
+    frame.lock = CreateFrame("Button", nil, frame)
+    frame.lock:SetWidth(20)
+    frame.lock:SetHeight(20)
+    frame.lock:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -7, -4)
+    frame.lock:SetScript("OnClick", function(button)
+        self:ToggleLayoutLock()
+        showLockTooltip(button, profile.locked ~= false)
+    end)
+    frame.lock:SetScript("OnEnter", function(button)
+        showLockTooltip(button, profile.locked ~= false)
+    end)
+    frame.lock:SetScript("OnLeave", function()
+        if GameTooltip then GameTooltip:Hide() end
+    end)
 
     frame.dragBar = CreateFrame("Frame", nil, frame)
     frame.dragBar:SetPoint("TOPLEFT", frame, "TOPLEFT", 3, -3)
@@ -177,15 +200,6 @@ function TestUI:Initialize()
     frame.resizeGrip:RegisterForClicks("LeftButtonDown", "LeftButtonUp")
     frame.resizeGrip:SetScript("OnMouseDown", function() self:BeginScaleResize() end)
     frame.resizeGrip:SetScript("OnMouseUp", function() self:EndScaleResize() end)
-
-    frame.unlockHint = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    frame.unlockHint:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -21, 5)
-    frame.unlockHint:SetText("drag window  |  resize")
-    frame.unlockHint:SetTextColor(0.35, 0.80, 1.00)
-
-    frame.scaleText = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    frame.scaleText:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 7, 5)
-    frame.scaleText:SetText(string.format("%d%%", math.floor(frame:GetScale() * 100 + 0.5)))
 
     frame.empty = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     frame.empty:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -29)
@@ -232,6 +246,9 @@ function TestUI:Refresh(rows, groups)
                 widget.action:Disable()
             elseif outgoing then
                 widget.action:SetText("BUSY")
+                widget.action:Disable()
+            elseif data.source == "TEST" then
+                widget.action:SetText("DEMO")
                 widget.action:Disable()
             elseif ARC.Requests:IsEligible(data.playerKey, data.spellID) then
                 widget.action:SetText("REQUEST")

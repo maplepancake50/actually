@@ -66,7 +66,9 @@ function ARC:Initialize()
     initializeOptional("BundleConfig")
     initializeOptional("TestUI")
     initializeOptional("SpoofTest")
+    self:Print("|cffff9f1a========== WORK IN PROGRESS ==========|r")
     self:Print("loaded; /act arc for commands")
+    self:Print("|cffff9f1a======================================|r")
 end
 
 function Events.ADDON_LOADED(loadedAddon)

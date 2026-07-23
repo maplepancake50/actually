@@ -578,7 +578,7 @@ function Bundles:CreateAlert()
 
     frame.heading = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     frame.heading:SetPoint("TOP", frame, "TOP", 0, -14)
-    frame.heading:SetText("ARC COOLDOWN BUNDLE")
+    frame.heading:SetText("ARC COOLDOWN BUNDLE - " .. ARC.Constants.WIP_TEXT)
     frame.heading:SetTextColor(0.78, 0.46, 1.00)
 
     frame.message = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
@@ -633,6 +633,10 @@ function Bundles:CreateOfficerSummary()
     frame.heading:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -14)
     frame.heading:SetText("COOLDOWN BUNDLE REQUESTED")
     frame.heading:SetTextColor(0.32, 0.86, 1.00)
+
+    frame.wip = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    frame.wip:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 9)
+    frame.wip:SetText(ARC.Constants.WIP_TEXT)
 
     frame.close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
     frame.close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -3, -3)

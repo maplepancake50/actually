@@ -384,7 +384,7 @@ function Requests:CreateAlert()
 
     frame.heading = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     frame.heading:SetPoint("TOP", frame, "TOP", 0, -15)
-    frame.heading:SetText("ARC REQUEST")
+    frame.heading:SetText("ARC REQUEST - " .. ARC.Constants.WIP_TEXT)
     frame.heading:SetTextColor(0.30, 0.86, 1.00)
 
     frame.icon = frame:CreateTexture(nil, "ARTWORK")

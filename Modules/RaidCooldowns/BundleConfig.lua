@@ -7,6 +7,23 @@ local ROW_GAP = 3
 local MIN_SCALE = 0.65
 local MAX_SCALE = 1.80
 
+local function applyLockIcon(button, locked)
+    local state = locked and "Locked" or "Unlocked"
+    button:SetText("")
+    button:SetNormalTexture("Interface\\Buttons\\LockButton-" .. state .. "-Up")
+    button:SetPushedTexture("Interface\\Buttons\\LockButton-" .. state .. "-Down")
+    button:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
+end
+
+local function showLockTooltip(button, locked)
+    if not GameTooltip then return end
+    GameTooltip:SetOwner(button, "ANCHOR_RIGHT")
+    GameTooltip:SetText(locked and "Bundle window locked" or "Bundle window unlocked")
+    GameTooltip:AddLine(locked and "Click to unlock background movement and resizing."
+        or "Click to lock background movement and resizing.", 0.35, 1.00, 0.35)
+    GameTooltip:Show()
+end
+
 local BACKDROP = {
     bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
     edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -200,15 +217,13 @@ function BundleConfig:ApplyLayoutLock()
     local frame, profile = self.frame, ARC.db.profile.bundleUI
     if not frame then return end
     local locked = profile.locked ~= false
-    frame.lock:SetText(locked and "Unlock" or "Lock")
+    applyLockIcon(frame.lock, locked)
     if locked then
         frame.resizeGrip:Hide()
-        frame.unlockHint:Hide()
         frame:SetBackdropColor(0.025, 0.025, 0.040, 0.72)
         frame:SetBackdropBorderColor(0.32, 0.18, 0.48, 0.88)
     else
         frame.resizeGrip:Show()
-        frame.unlockHint:Show()
         frame:SetBackdropColor(0.035, 0.030, 0.055, 0.88)
         frame:SetBackdropBorderColor(0.72, 0.30, 1.00, 1)
     end
@@ -481,7 +496,7 @@ function BundleConfig:Initialize()
 
     frame.title = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
     frame.title:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -14)
-    frame.title:SetText("Actually Raid Cooldowns - CD Bundles")
+    frame.title:SetText("Actually Raid Cooldowns - CD Bundles - " .. ARC.Constants.WIP_TEXT)
     frame.title:SetTextColor(0.92, 0.96, 1.00)
 
     frame.dragBar = CreateFrame("Frame", nil, frame)
@@ -505,16 +520,20 @@ function BundleConfig:Initialize()
     frame.close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -3, -3)
     frame.close:SetScript("OnClick", function() frame:Hide() end)
 
-    frame.lock = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    frame.lock:SetWidth(52)
+    frame.lock = CreateFrame("Button", nil, frame)
+    frame.lock:SetWidth(20)
     frame.lock:SetHeight(20)
-    frame.lock:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -38, -5)
-    frame.lock:SetScript("OnClick", function() self:ToggleLayoutLock() end)
-
-    frame.unlockHint = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    frame.unlockHint:SetPoint("RIGHT", frame.lock, "LEFT", -6, 0)
-    frame.unlockHint:SetText("drag background  |  resize below")
-    frame.unlockHint:SetTextColor(0.75, 0.48, 1.00)
+    frame.lock:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -34, -5)
+    frame.lock:SetScript("OnClick", function(button)
+        self:ToggleLayoutLock()
+        showLockTooltip(button, profile.locked ~= false)
+    end)
+    frame.lock:SetScript("OnEnter", function(button)
+        showLockTooltip(button, profile.locked ~= false)
+    end)
+    frame.lock:SetScript("OnLeave", function()
+        if GameTooltip then GameTooltip:Hide() end
+    end)
 
     self.previousBundle = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
     self.previousBundle:SetWidth(50)
