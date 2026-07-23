@@ -648,10 +648,7 @@ function BundleConfig:Initialize()
 end
 
 function BundleConfig:Show()
-    if not ARC.Roster:IsLocalCoordinator() then
-        ARC:Print("only the party leader, raid leader, or raid assistants can change ARC configuration")
-        return false
-    end
+    if not ARC:RequireConfigurationAuthority() then return false end
     self:Refresh()
     self.frame:Show()
     return true

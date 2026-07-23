@@ -7,8 +7,8 @@ local ShortName = Addon.Util.ShortName
 local NormalizeCharacter = Addon.Util.NormalizeCharacter
 
 local PREFIX = Addon.MESSAGE_PREFIX
-local PROTOCOL = 4
-local LEGACY_PROTOCOL = 3
+local PROTOCOL = 5
+local LEGACY_PROTOCOLS = { [3] = true, [4] = true }
 local HEARTBEAT_INTERVAL = 30
 local PEER_TIMEOUT = 75
 local RETRY_INTERVAL = 10
@@ -207,6 +207,15 @@ function Sync:Serialize()
         table.insert(lines, table.concat({ "Q", Encode(id), tostring(tonumber(deletedAt) or 0) }, "\t"))
     end
 
+    for _, role in ipairs({ "healer", "dps", "frontline" }) do
+        local meta = Addon.db.cacheTipsMeta and Addon.db.cacheTipsMeta[role] or {}
+        table.insert(lines, table.concat({
+            "N", role, tostring(tonumber(meta.updatedAt) or 0), Encode(meta.updatedBy),
+            tostring(tonumber(meta.authorityRevision) or 0),
+            Encode(Addon.db.cacheTips and Addon.db.cacheTips[role] or ""),
+        }, "\t"))
+    end
+
     for _, peerName in pairs(Addon.db.sync.knownPeers or {}) do
         table.insert(lines, table.concat({ "K", Encode(peerName) }, "\t"))
     end
@@ -286,6 +295,9 @@ function Sync:RefreshUI()
     if Addon.Gear then
         Addon.Gear:Refresh()
     end
+    if Addon.CacheTips then
+        Addon.CacheTips:Refresh()
+    end
 end
 
 function Sync:Log(message)
@@ -333,14 +345,14 @@ function Sync:Deserialize(snapshot)
         board = {}, baseBoard = {}, operations = {}, spells = {}, spellTombstones = {},
         gearSets = {}, gearTombstones = {}, knownPeers = {}, priority = {},
         priorityDeleted = {}, comments = {}, deleted = {}, audit = {},
-        authority = { officers = {} },
+        authority = { officers = {} }, cacheTips = {},
     }
     for line in string.gmatch((snapshot or "") .. "\n", "(.-)\n") do
         local field = Fields(line)
         local kind = field[1]
         if kind == "V" then
             data.protocol = tonumber(field[2])
-            if data.protocol ~= PROTOCOL and data.protocol ~= LEGACY_PROTOCOL then
+            if data.protocol ~= PROTOCOL and not LEGACY_PROTOCOLS[data.protocol] then
                 return nil
             end
         elseif kind == "O" then
@@ -420,6 +432,13 @@ function Sync:Deserialize(snapshot)
             if id ~= "" then
                 data.gearTombstones[id] = tonumber(field[3]) or 0
             end
+        elseif kind == "N" and (field[2] == "healer" or field[2] == "dps" or field[2] == "frontline") then
+            data.cacheTips[field[2]] = {
+                updatedAt = tonumber(field[3]) or 0,
+                updatedBy = Decode(field[4]),
+                authorityRevision = tonumber(field[5]) or 0,
+                text = Decode(field[6]),
+            }
         elseif kind == "K" then
             local peerName = Decode(field[2])
             if peerName ~= "" then
@@ -626,7 +645,7 @@ function Sync:ApplySnapshot(snapshot)
     official.operations = type(official.operations) == "table" and official.operations or {}
     if acceptIncomingOfficial then
         for id, operation in pairs(incoming.operations) do
-            if operation.authorityRevision == nil and incoming.protocol == LEGACY_PROTOCOL then
+            if operation.authorityRevision == nil and incoming.protocol == 3 then
                 operation.authorityRevision = currentAuthorityRevision
             end
             if not Addon.Official or Addon.Official:IsOperationAuthorized(operation, authority) then
@@ -712,6 +731,33 @@ function Sync:ApplySnapshot(snapshot)
             Addon.db.gear.sets[id] = nil
             Addon.db.gear.tombstones[id] = deletedAt
             changed = true
+        end
+    end
+
+    Addon.db.cacheTips = type(Addon.db.cacheTips) == "table" and Addon.db.cacheTips or {}
+    Addon.db.cacheTipsMeta = type(Addon.db.cacheTipsMeta) == "table" and Addon.db.cacheTipsMeta or {}
+    for role, record in pairs(incoming.cacheTips or {}) do
+        local incomingEpoch = tonumber(record.authorityRevision) or 0
+        local currentEpoch = tonumber(authority.revision) or 0
+        if incomingEpoch == currentEpoch then
+            local localMeta = type(Addon.db.cacheTipsMeta[role]) == "table"
+                and Addon.db.cacheTipsMeta[role] or {}
+            local incomingTime = tonumber(record.updatedAt) or 0
+            local localTime = tonumber(localMeta.updatedAt) or 0
+            local incomingSignature = tostring(record.updatedBy or "") .. "|" .. tostring(record.text or "")
+            local localSignature = tostring(localMeta.updatedBy or "") .. "|"
+                .. tostring(Addon.db.cacheTips[role] or "")
+            if tonumber(localMeta.authorityRevision) ~= currentEpoch
+                or incomingTime > localTime
+                or (incomingTime == localTime and incomingSignature > localSignature) then
+                Addon.db.cacheTips[role] = tostring(record.text or "")
+                Addon.db.cacheTipsMeta[role] = {
+                    updatedAt = incomingTime,
+                    updatedBy = tostring(record.updatedBy or ""),
+                    authorityRevision = incomingEpoch,
+                }
+                changed = true
+            end
         end
     end
 

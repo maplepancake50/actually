@@ -67,6 +67,26 @@ function ARC:Debug(message)
     end
 end
 
+function ARC:HasConfigurationAuthority(identity)
+    local official = Actually and Actually.Official
+    if not official then return false end
+    if type(official.IsOfficer) == "function" then
+        local ok, allowed = pcall(official.IsOfficer, official, identity)
+        if ok and allowed == true then return true end
+    end
+    if type(official.IsLeader) == "function" then
+        local ok, allowed = pcall(official.IsLeader, official, identity)
+        if ok and allowed == true then return true end
+    end
+    return false
+end
+
+function ARC:RequireConfigurationAuthority(identity)
+    if self:HasConfigurationAuthority(identity) then return true end
+    self:Print("only an actually officer or the actually leader can change ARC configuration")
+    return false
+end
+
 function ARC:ShowWindowContextMenu(dropdown, title, closeFunction)
     if not dropdown or type(closeFunction) ~= "function" then return end
     local function closeWindow()

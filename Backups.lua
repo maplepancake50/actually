@@ -151,7 +151,7 @@ function Backups:RestoreRecord(record)
     official.operationClock = 0
     official.operationStateVersion = 2
     Addon.Official:AddAuditEntry(
-        "Restored official tier and gear data from " .. DisplayTime(record.timestamp) .. ".",
+        "Restored official tier, gear, and Cache Tips data from " .. DisplayTime(record.timestamp) .. ".",
         restorer,
         true
     )
@@ -183,12 +183,24 @@ function Backups:RestoreRecord(record)
         if not Addon.db.gear.sets[id] then Addon.db.gear.tombstones[id] = restoredAt end
     end
 
+    for _, role in ipairs({ "healer", "dps", "frontline" }) do
+        local cacheRecord = incoming.cacheTips and incoming.cacheTips[role]
+        if cacheRecord then
+            Addon.db.cacheTips[role] = tostring(cacheRecord.text or "")
+            Addon.db.cacheTipsMeta[role] = {
+                updatedAt = restoredAt,
+                updatedBy = restorer,
+                authorityRevision = authorityRevision,
+            }
+        end
+    end
+
     if Addon.Official then Addon.Official:RebuildBoard() end
     if Addon.Sync then
         Addon.Sync:MarkDirty(true)
         Addon.Sync:RefreshUI()
     end
-    Addon:Print("Restored the official tier and gear data from " .. DisplayTime(record.timestamp) .. ".")
+    Addon:Print("Restored official tier, gear, and Cache Tips data from " .. DisplayTime(record.timestamp) .. ".")
     if self.frame and self.frame:IsShown() then self:Refresh() end
     return true
 end
@@ -318,7 +330,7 @@ function Backups:CreateFrame()
     end)
 
     StaticPopupDialogs.ACTUALLY_RESTORE_RECOVERY = {
-        text = "Restore official tier and gear data from %s?\n\nA backup of the current state will be made first.",
+        text = "Restore official tier, gear, and Cache Tips data from %s?\n\nA backup of the current state will be made first.",
         button1 = "Restore",
         button2 = "Cancel",
         OnAccept = function(_, record) Backups:RestoreRecord(record) end,

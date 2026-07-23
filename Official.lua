@@ -208,6 +208,16 @@ function Official:AdvanceAuthority(change, action)
     authority.changeID = Addon.Util.NewPersistentID()
     authority.stateVersion = 1
     self:CheckpointCurrentBoard(authority.revision)
+    Addon.db.cacheTipsMeta = type(Addon.db.cacheTipsMeta) == "table"
+        and Addon.db.cacheTipsMeta or {}
+    for _, role in ipairs({ "healer", "dps", "frontline" }) do
+        local meta = type(Addon.db.cacheTipsMeta[role]) == "table"
+            and Addon.db.cacheTipsMeta[role] or {}
+        meta.updatedAt = tonumber(meta.updatedAt) or 0
+        meta.updatedBy = tostring(meta.updatedBy or "")
+        meta.authorityRevision = authority.revision
+        Addon.db.cacheTipsMeta[role] = meta
+    end
     if action and action ~= "" then
         self:AddAuditEntry(action, actor, true)
     end

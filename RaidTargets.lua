@@ -20,6 +20,7 @@ local TOMBSTONE_RETENTION = 180 * 24 * 60 * 60
 local MAX_TOMBSTONES = 1000
 local MAX_UPLOAD_ATTEMPTS = 20
 local MAX_SAVED_FIGHTS = 200
+local MAX_RUN_NOTES = 100
 local UPDATE_INTERVAL = 0.10
 
 local KIND = "AL"
@@ -141,6 +142,17 @@ local function FindRaidMember(identity)
         if name and PlayerKey(name) == wanted then
             return ShortName(name)
         end
+    end
+end
+
+local function FindRaidUnit(identity)
+    local wanted = PlayerKey(identity)
+    local count = GetNumRaidMembers and GetNumRaidMembers() or 0
+    for index = 1, count do
+        local unit = "raid" .. tostring(index)
+        local name = UnitName and UnitName(unit)
+        if not name and GetRaidRosterInfo then name = GetRaidRosterInfo(index) end
+        if name and PlayerKey(name) == wanted then return unit end
     end
 end
 
@@ -584,6 +596,31 @@ function RaidTargets:NotifyChanged()
     end
 end
 
+function RaidTargets:TrackCallerDeath(run)
+    if not run or not run.caller then return end
+    local unit = FindRaidUnit(run.caller)
+    if not unit or not UnitIsDeadOrGhost then return end
+    local dead = UnitIsDeadOrGhost(unit) and true or false
+    if run.callerWasDead == nil then
+        run.callerWasDead = dead
+        return
+    end
+    if dead and not run.callerWasDead then
+        run.notes = type(run.notes) == "table" and run.notes or {}
+        local callerName = ShortName(run.caller)
+        table.insert(run.notes, {
+            at = math.max(0, Now() - (tonumber(run.startedAt) or Now())),
+            epoch = Stamp(),
+            kind = "caller_death",
+            player = callerName,
+            text = callerName .. " died while serving as shot caller.",
+        })
+        while #run.notes > MAX_RUN_NOTES do table.remove(run.notes, 1) end
+        self:NotifyChanged()
+    end
+    run.callerWasDead = dead
+end
+
 function RaidTargets:Start(label)
     if self.activeOfficerRun then
         return nil, "An Assist Tracker session is already running."
@@ -615,10 +652,14 @@ function RaidTargets:Start(label)
         players = {},
         clock = {},
         expected = {},
+        notes = {},
         state = "recording",
         nextReminderAt = Now() + REMINDER_INTERVAL,
         nextStartBroadcastAt = Now() + CONTROL_REPLAY_INTERVAL,
     }
+    local callerUnit = FindRaidUnit(callerName)
+    run.callerWasDead = callerUnit and UnitIsDeadOrGhost
+        and (UnitIsDeadOrGhost(callerUnit) and true or false) or false
     local count = GetNumRaidMembers()
     for index = 1, count do
         local name = GetRaidRosterInfo(index)
@@ -1320,6 +1361,7 @@ function RaidTargets:OnUpdate(elapsed)
         SendStartControl(self.activeOfficerRun, "RAID")
         self.activeOfficerRun.nextStartBroadcastAt = now + CONTROL_REPLAY_INTERVAL
     end
+    self:TrackCallerDeath(self.activeOfficerRun)
     if self.activeOfficerRun and self.clockPingsSent < CLOCK_PING_COUNT and Now() >= self.nextClockPing then
         self:SendClockPing()
         self.nextClockPing = Now() + CLOCK_PING_INTERVAL

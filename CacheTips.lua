@@ -24,6 +24,58 @@ local ROLE_DEFINITIONS = {
     },
 }
 
+function CacheTips:CanEdit()
+    if not Addon.Official or not Addon.Official:IsOfficer() then
+        return false
+    end
+    return not Addon.Sync or not Addon.Sync.IsOfficialEditReady
+        or Addon.Sync:IsOfficialEditReady()
+end
+
+function CacheTips:CommitRole(role)
+    local draft = self.pendingDrafts and self.pendingDrafts[role]
+    if draft == nil then return false end
+    self.pendingDrafts[role] = nil
+    if draft == tostring(Addon.db.cacheTips[role] or "") then
+        return false
+    end
+    if not self:CanEdit() then
+        self:Refresh()
+        return false
+    end
+
+    Addon.db.cacheTips[role] = draft
+    local meta = Addon.db.cacheTipsMeta[role]
+    local stamp = time and time() or 0
+    meta.updatedAt = math.max(stamp, (tonumber(meta.updatedAt) or 0) + 1)
+    meta.updatedBy = Addon.Official:GetPlayerIdentity()
+    meta.authorityRevision = tonumber(Addon.Official:GetAuthority().revision) or 0
+    if Addon.Official.RecordActivity then
+        Addon.Official:RecordActivity("Updated " .. string.upper(role) .. " Cache Tips.")
+    end
+    if Addon.Sync then
+        Addon.Sync:MarkDirty(true)
+    end
+    return true
+end
+
+function CacheTips:QueueRoleDraft(role, text)
+    if not self:CanEdit() then
+        self:Refresh()
+        return
+    end
+    self.pendingDrafts = self.pendingDrafts or {}
+    self.pendingDrafts[role] = tostring(text or "")
+    self.nextDraftCommitAt = (GetTime and GetTime() or 0) + 2
+end
+
+function CacheTips:CommitPending()
+    for _, definition in ipairs(ROLE_DEFINITIONS) do
+        self:CommitRole(definition.key)
+    end
+    self.nextDraftCommitAt = nil
+end
+
 local function CreateHealerCross(parent, color)
     local vertical = parent:CreateTexture(nil, "ARTWORK")
     vertical:SetWidth(13)
@@ -105,7 +157,7 @@ local function CreateRolePanel(root, definition, anchor)
         edit:SetHeight(math.max(20, scroll:GetHeight() or 0, (measure:GetStringHeight() or 0) + 22))
     end
     edit:SetScript("OnTextChanged", function(self, userInput)
-        if userInput then Addon.db.cacheTips[definition.key] = self:GetText() or "" end
+        if userInput then CacheTips:QueueRoleDraft(definition.key, self:GetText() or "") end
         ResizeEdit()
     end)
     scroll:SetScript("OnSizeChanged", ResizeEdit)
@@ -115,14 +167,17 @@ local function CreateRolePanel(root, definition, anchor)
             definition.border[1], definition.border[2], definition.border[3], 0.95)
     end)
     edit:SetScript("OnEditFocusLost", function()
+        CacheTips:CommitRole(definition.key)
         inputBackground:SetBackdropBorderColor(
             definition.border[1], definition.border[2], definition.border[3], 0.36)
     end)
-    inputBackground:SetScript("OnMouseDown", function() edit:SetFocus() end)
+    inputBackground:SetScript("OnMouseDown", function()
+        if CacheTips:CanEdit() then edit:SetFocus() end
+    end)
     edit:SetText(Addon.db.cacheTips[definition.key] or "")
     ResizeEdit()
 
-    return panel, edit
+    return panel, edit, inputBackground
 end
 
 function CacheTips:Create()
@@ -142,7 +197,7 @@ function CacheTips:Create()
 
     local subtitle = root:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -7)
-    subtitle:SetText("Personal raid utilities and role notes")
+    subtitle:SetText("Shared guild role notes  |  Officers can edit")
     subtitle:SetTextColor(0.57, 0.66, 0.76)
 
     local utility = CreateFrame("Frame", nil, root)
@@ -193,6 +248,32 @@ function CacheTips:Create()
             local enabled = owner:GetChecked() == 1 or owner:GetChecked() == true
             Addon.FapAlert:SetEnabled(enabled, enabled)
         end
+    end)
+
+    local raidCCCheckbox = CreateFrame("CheckButton", "ActuallyRaidCCCheckButton", utility,
+        "UICheckButtonTemplate")
+    raidCCCheckbox:SetWidth(26)
+    raidCCCheckbox:SetHeight(26)
+    raidCCCheckbox:SetPoint("TOPLEFT", utility, "TOPLEFT", 300, -75)
+    local raidCCLabel = raidCCCheckbox:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    raidCCLabel:SetPoint("LEFT", raidCCCheckbox, "RIGHT", 4, 1)
+    raidCCLabel:SetText("Enable Raid CC Mode")
+    self.raidCCCheckbox = raidCCCheckbox
+
+    raidCCCheckbox:SetScript("OnClick", function(owner)
+        if Addon.RaidCC then
+            local enabled = owner:GetChecked() == 1 or owner:GetChecked() == true
+            Addon.RaidCC:SetEnabled(enabled)
+        end
+    end)
+    raidCCCheckbox:SetScript("OnEnter", function(owner)
+        GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Enable Raid CC Mode", 1, 1, 1)
+        GameTooltip:AddLine("While in a raid, enables friendly and enemy player nameplates, displays raid members as names only, and marks Cyclone or Shadowfury.", nil, nil, nil, true)
+        GameTooltip:Show()
+    end)
+    raidCCCheckbox:SetScript("OnLeave", function()
+        GameTooltip:Hide()
     end)
 
     local arcAlerts = CreateFrame("Frame", nil, root)
@@ -268,20 +349,60 @@ function CacheTips:Create()
     roleHeading:SetTextColor(0.82, 0.86, 0.94)
 
     self.roleEdits = {}
+    self.roleBackgrounds = {}
+    self.pendingDrafts = {}
     local anchors = {
         { point = "TOPLEFT", bottom = "BOTTOMLEFT", x = 0 },
         { point = "TOP", bottom = "BOTTOM", x = 0 },
         { point = "TOPRIGHT", bottom = "BOTTOMRIGHT", x = 0 },
     }
     for index, definition in ipairs(ROLE_DEFINITIONS) do
-        local rolePanel, edit = CreateRolePanel(root, definition, anchors[index])
+        local rolePanel, edit, inputBackground = CreateRolePanel(root, definition, anchors[index])
         self.roleEdits[definition.key] = edit
+        self.roleBackgrounds[definition.key] = inputBackground
         self[definition.key .. "Panel"] = rolePanel
     end
 
+    root:SetScript("OnUpdate", function()
+        if CacheTips.nextDraftCommitAt
+            and (GetTime and GetTime() or 0) >= CacheTips.nextDraftCommitAt then
+            CacheTips:CommitPending()
+        end
+    end)
+
+    self:Refresh()
     self:RefreshArrowToggle()
     self:RefreshFapToggle()
+    self:RefreshRaidCCToggle()
     self:RefreshARCAlertControls()
+end
+
+function CacheTips:RefreshPermissions()
+    local canEdit = self:CanEdit()
+    for _, definition in ipairs(ROLE_DEFINITIONS) do
+        local edit = self.roleEdits and self.roleEdits[definition.key]
+        if edit then
+            if canEdit then
+                edit:Enable()
+                edit:SetTextColor(0.88, 0.91, 0.96)
+            else
+                if edit:HasFocus() then edit:ClearFocus() end
+                edit:Disable()
+                edit:SetTextColor(0.78, 0.82, 0.90)
+            end
+        end
+    end
+end
+
+function CacheTips:Refresh()
+    if not self.root then return end
+    for _, definition in ipairs(ROLE_DEFINITIONS) do
+        local edit = self.roleEdits and self.roleEdits[definition.key]
+        if edit and not edit:HasFocus() then
+            edit:SetText(Addon.db.cacheTips[definition.key] or "")
+        end
+    end
+    self:RefreshPermissions()
 end
 
 function CacheTips:RefreshARCAlertControls()
@@ -309,6 +430,11 @@ end
 function CacheTips:RefreshFapToggle()
     if not self.fapCheckbox then return end
     self.fapCheckbox:SetChecked(Addon.FapAlert and Addon.FapAlert:IsEnabled() or false)
+end
+
+function CacheTips:RefreshRaidCCToggle()
+    if not self.raidCCCheckbox then return end
+    self.raidCCCheckbox:SetChecked(Addon.RaidCC and Addon.RaidCC:IsEnabled() or false)
 end
 
 function CacheTips:RefreshArrowToggle()
@@ -341,9 +467,12 @@ function CacheTips:SetVisible(visible)
         self.root:SetPoint("BOTTOMRIGHT", Addon.Board.sectionPanel, "BOTTOMRIGHT", -22, bottom)
         self:RefreshArrowToggle()
         self:RefreshFapToggle()
+        self:RefreshRaidCCToggle()
         self:RefreshARCAlertControls()
+        self:Refresh()
         self.root:Show()
     else
+        self:CommitPending()
         for _, edit in pairs(self.roleEdits or {}) do edit:ClearFocus() end
         local arc = Addon.Modules and Addon.Modules.RaidCooldowns
         if arc and arc.AlertUI and arc.AlertUI.StopPositioning then

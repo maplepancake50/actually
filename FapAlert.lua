@@ -49,19 +49,6 @@ local function IsCurrentRaidMember(name)
     return false
 end
 
-local function PlayAlertSound()
-    -- Custom procedural wind swish shipped with the addon. Older clients do
-    -- not reliably report a missing file, so PlaySound remains the API fallback.
-    if PlaySoundFile then
-        local played = pcall(PlaySoundFile,
-            "Interface\\AddOns\\actually\\Sounds\\FapWindWhoosh.wav")
-        if played then return end
-    end
-    if PlaySound then
-        pcall(PlaySound, "RaidWarning")
-    end
-end
-
 function FapAlert:Create()
     if self.frame then return end
 
@@ -154,7 +141,6 @@ function FapAlert:Show(force)
     self.frame:SetAlpha(1)
     self.frame:Show()
 
-    PlayAlertSound()
     return true
 end
 

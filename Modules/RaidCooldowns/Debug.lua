@@ -293,9 +293,7 @@ function Debug:Help()
 end
 
 local function canConfigure()
-    if ARC.Roster and ARC.Roster:IsLocalCoordinator() then return true end
-    ARC:Print("only the party leader, raid leader, or raid assistants can change ARC configuration")
-    return false
+    return ARC:RequireConfigurationAuthority()
 end
 
 function Debug:Handle(input)

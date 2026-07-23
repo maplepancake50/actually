@@ -1779,6 +1779,9 @@ function Board:RefreshListControls()
     if Addon.Gear and Addon.Gear.frame then
         Addon.Gear:RefreshPermissions()
     end
+    if Addon.CacheTips and Addon.CacheTips.RefreshPermissions then
+        Addon.CacheTips:RefreshPermissions()
+    end
     self:RefreshSectionNavigationPermissions()
 end
 

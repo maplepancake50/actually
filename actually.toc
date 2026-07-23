@@ -2,13 +2,11 @@
 ## Title: actually
 ## Notes: Draggable utility-spell tier board prototype for Ascension Season 10 caches.
 ## Author: Luke
-## Version: 0.3.0
+## Version: 0.3.2
 ## SavedVariables: ActuallyDB
 ## OptionalDeps: TurboPlates
 
 Core.lua
-Modules\RaidCC\Core.lua
-Modules\RaidCC\Options.lua
 Official.lua
 Discussion.lua
 TierBoard.lua
@@ -19,6 +17,7 @@ Backups.lua
 RaidTargets.lua
 CallerArrow.lua
 FapAlert.lua
+RaidCC.lua
 CacheTips.lua
 AssistLogUI.lua
 FocusAssignments.lua

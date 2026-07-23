@@ -595,6 +595,12 @@ function UI:ShowActive()
     self:AddRow("RECORDING  " .. FightLabel(run), nil, COLORS.green, "header")
     self:AddRow("Controller: " .. tostring(run.officer) .. "     Shot caller: "
         .. tostring(run.caller or run.officer) .. "     Elapsed: " .. FormatTime(GetTime() - run.startedAt))
+    if run.notes and #run.notes > 0 then
+        self:AddRow("TRACKER NOTES", nil, COLORS.amber, "header")
+        for _, note in ipairs(run.notes) do
+            self:AddRow("[" .. FormatTime(note.at) .. "]  " .. tostring(note.text or "Tracker note"), nil, COLORS.amber)
+        end
+    end
     self:AddRow("", nil, nil, "spacer")
     self:AddRow("RAID ADDON RESPONSES", nil, COLORS.cyan, "header")
     local players = {}
@@ -681,6 +687,12 @@ function UI:ShowFight(fight)
     self:AddRow("Duration: " .. FormatTime(fight.duration, true) .. "     Controller: " .. tostring(fight.officer)
         .. "     Shot caller: " .. tostring(fight.caller or ((fight.players[fight.callerKey] or {}).name) or "?") )
     self:AddRow(teamText)
+    if fight.notes and #fight.notes > 0 then
+        self:AddRow("TRACKER NOTES", nil, COLORS.amber, "header")
+        for _, note in ipairs(fight.notes) do
+            self:AddRow("[" .. FormatTime(note.at) .. "]  " .. tostring(note.text or "Tracker note"), nil, COLORS.amber)
+        end
+    end
     self:AddRow("Click a follower to inspect exact matching and wrong-target intervals.", nil, COLORS.muted)
     self:AddRow("", nil, nil, "spacer")
     self:AddRow("PLAYER                         SAME TARGET / CALLER TARGET TIME            MATCH", nil,

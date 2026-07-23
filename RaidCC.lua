@@ -1,12 +1,10 @@
 local Addon = Actually
 
-Addon.Modules = Addon.Modules or {}
-Addon.Modules.RaidCC = Addon.Modules.RaidCC or {}
-
-local RaidCC = Addon.Modules.RaidCC
+Addon.RaidCC = Addon.RaidCC or {}
+local RaidCC = Addon.RaidCC
 
 local HEARTBEAT_INTERVAL = 0.30
-local ARROW_TEXTURE = "Interface\\AddOns\\Actually\\Modules\\RaidCC\\Textures\\arrow.tga"
+local ARROW_TEXTURE = "Interface\\AddOns\\Actually\\Textures\\RaidCCArrow.tga"
 local WARNING_INTERVAL = 30
 
 -- TurboPlates 1.4.5 compatibility boundary (audited against its Core.lua and
@@ -43,6 +41,7 @@ RaidCC.initialized = false
 RaidCC.cvarGuard = false
 RaidCC.elapsed = 0
 RaidCC.lastWarningAt = -WARNING_INTERVAL
+RaidCC.debugEnabled = false
 
 local function ClearTable(value)
     if wipe then
@@ -56,6 +55,22 @@ end
 
 local function Now()
     return GetTime and GetTime() or 0
+end
+
+local function CountTable(value)
+    local count = 0
+    for _ in pairs(value or {}) do
+        count = count + 1
+    end
+    return count
+end
+
+local function UnitDescription(unit)
+    if not unit then return "unit=nil" end
+    local name = UnitName and UnitName(unit)
+    local guid = UnitGUID and UnitGUID(unit)
+    return "unit=" .. tostring(unit) .. " name=" .. tostring(name)
+        .. " guid=" .. tostring(guid)
 end
 
 local function IsRaid()
@@ -96,6 +111,56 @@ function RaidCC:Print(message)
     end
 end
 
+function RaidCC:Debug(message)
+    if self.debugEnabled or (self.db and self.db.debug == true) then
+        self:Print("DEBUG " .. tostring(message))
+    end
+end
+
+function RaidCC:SetDebug(enabled)
+    self.debugEnabled = enabled and true or false
+    if self.db then self.db.debug = self.debugEnabled end
+    self:Print("debug " .. (self.debugEnabled and "enabled" or "disabled"))
+    if self.debugEnabled then self:PrintStatus() end
+end
+
+function RaidCC:PrintStatus()
+    local active, compatible, retrying = 0, 0, 0
+    for nameplate in pairs(self.visiblePlates or {}) do
+        local state = nameplate._actuallyRaidCCState
+        if self:HasCompatibleFrames(nameplate) then compatible = compatible + 1 end
+        if state and state.active then active = active + 1 end
+        if state and state.retryAt then retrying = retrying + 1 end
+    end
+    local turboLoaded = IsAddOnLoaded and IsAddOnLoaded("TurboPlates")
+    self:Print("status enabled=" .. tostring(self.db and self.db.enabled == true)
+        .. " inRaid=" .. tostring(IsRaid())
+        .. " runtime=" .. tostring(self.runtimeActive)
+        .. " turboPlates=" .. tostring(turboLoaded and true or false)
+        .. " raidGUIDs=" .. tostring(CountTable(self.raidGUIDs))
+        .. " visible=" .. tostring(CountTable(self.visiblePlates))
+        .. " compatible=" .. tostring(compatible)
+        .. " overridden=" .. tostring(active)
+        .. " retrying=" .. tostring(retrying)
+        .. " friendsCVar=" .. tostring(self:GetCVarValue("nameplateShowFriends"))
+        .. " enemiesCVar=" .. tostring(self:GetCVarValue("nameplateShowEnemies")))
+end
+
+function RaidCC:HandleCommand(input)
+    local command = string.lower(string.gsub(tostring(input or ""), "^%s*(.-)%s*$", "%1"))
+    if command == "debug" then
+        self:SetDebug(not (self.debugEnabled or (self.db and self.db.debug == true)))
+    elseif command == "status" then
+        self:PrintStatus()
+    elseif command == "scan" then
+        self:RebuildRaidGUIDCache()
+        self:ReevaluateVisiblePlates()
+        self:PrintStatus()
+    else
+        self:Print("commands: /raidcc debug, /raidcc status, /raidcc scan")
+    end
+end
+
 function RaidCC:WarnCompatibility()
     local current = Now()
     if current - self.lastWarningAt < WARNING_INTERVAL then
@@ -109,6 +174,22 @@ function RaidCC:ShouldModeBeActive()
     return self.db and self.db.enabled == true and IsRaid()
 end
 
+function RaidCC:IsEnabled()
+    return self.db and self.db.enabled == true or false
+end
+
+function RaidCC:SetEnabled(enabled)
+    if not self.db then
+        return
+    end
+    self.db.enabled = enabled and true or false
+    self:RefreshMode()
+    self:ReevaluateVisiblePlates()
+    if Addon.CacheTips and Addon.CacheTips.RefreshRaidCCToggle then
+        Addon.CacheTips:RefreshRaidCCToggle()
+    end
+end
+
 function RaidCC:RebuildRaidGUIDCache()
     ClearTable(self.raidGUIDs)
     if not IsRaid() then
@@ -120,17 +201,38 @@ function RaidCC:RebuildRaidGUIDCache()
             self.raidGUIDs[guid] = true
         end
     end
+    self:Debug("raid GUID cache rebuilt count=" .. tostring(CountTable(self.raidGUIDs)))
+end
+
+function RaidCC:ClassifyUnit(unit)
+    if not self.runtimeActive then
+        return false, "runtime-inactive"
+    end
+    if not unit then
+        return false, "missing-unit"
+    end
+    if not UnitExists(unit) then
+        return false, "unit-does-not-exist"
+    end
+    if not UnitIsPlayer(unit) then
+        return false, "not-player"
+    end
+    if UnitIsUnit(unit, "player") then
+        return false, "self"
+    end
+    local guid = UnitGUID(unit)
+    if not guid then
+        return false, "missing-guid"
+    end
+    if self.raidGUIDs[guid] ~= true then
+        return false, "not-raid-member"
+    end
+    return true, "raid-member"
 end
 
 function RaidCC:ShouldOverrideUnit(unit)
-    if not self.runtimeActive or not unit or not UnitExists(unit) then
-        return false
-    end
-    if not UnitIsPlayer(unit) or UnitIsUnit(unit, "player") then
-        return false
-    end
-    local guid = UnitGUID(unit)
-    return guid and self.raidGUIDs[guid] == true or false
+    local allowed = self:ClassifyUnit(unit)
+    return allowed
 end
 
 function RaidCC:HasCompatibleFrames(nameplate)
@@ -175,6 +277,8 @@ function RaidCC:GetState(nameplate)
             retryAt = nil,
             retryCount = 0,
             retryScheduled = false,
+            debugDecision = nil,
+            arrowShown = false,
         }
         nameplate._actuallyRaidCCState = state
     end
@@ -265,7 +369,7 @@ function RaidCC:SuppressTurboPlates(nameplate)
     SafeHide(nameplate[LITE_ICON_FIELD])
 end
 
-function RaidCC:RemoveOverride(nameplate, plateIsBeingRemoved)
+function RaidCC:RemoveOverride(nameplate, plateIsBeingRemoved, reason)
     local state = nameplate and nameplate._actuallyRaidCCState
     if not state then
         return
@@ -278,6 +382,10 @@ function RaidCC:RemoveOverride(nameplate, plateIsBeingRemoved)
     if state.overlay then
         state.overlay.arrow:Hide()
         state.overlay:Hide()
+    end
+    if wasActive then
+        self:Debug("override removed reason=" .. tostring(reason or "reevaluated")
+            .. " " .. UnitDescription(state.unit))
     end
     if plateIsBeingRemoved or not wasActive then
         return
@@ -304,7 +412,7 @@ function RaidCC:HasTrackedCC(unit)
             break
         end
         if (spellID and trackedSpellIDs[spellID]) or self.trackedSpellNames[name] then
-            return true
+            return true, name, spellID
         end
     end
     return false
@@ -316,10 +424,18 @@ function RaidCC:UpdateArrow(state)
         and UnitExists(state.unit)
         and UnitGUID(state.unit) == state.guid
         and self.raidGUIDs[state.guid] == true
-    if valid and self:HasTrackedCC(state.unit) then
+    local hasCC, spellName, spellID = valid and self:HasTrackedCC(state.unit)
+    if hasCC then
         state.overlay.arrow:Show()
     else
         state.overlay.arrow:Hide()
+    end
+    if state.arrowShown ~= (hasCC and true or false) then
+        state.arrowShown = hasCC and true or false
+        self:Debug("CC arrow " .. (state.arrowShown and "shown" or "hidden")
+            .. " " .. UnitDescription(state.unit)
+            .. (state.arrowShown and (" spell=" .. tostring(spellName)
+                .. " spellID=" .. tostring(spellID)) or ""))
     end
 end
 
@@ -350,8 +466,14 @@ function RaidCC:EvaluatePlate(nameplate, unit)
         self.unitToPlate[unit] = nameplate
     end
 
-    if not self:ShouldOverrideUnit(unit) then
-        self:RemoveOverride(nameplate, false)
+    local shouldOverride, decision = self:ClassifyUnit(unit)
+    if not shouldOverride then
+        if state.debugDecision ~= decision then
+            state.debugDecision = decision
+            self:Debug("plate decision=" .. tostring(decision) .. " "
+                .. UnitDescription(unit))
+        end
+        self:RemoveOverride(nameplate, false, decision)
         return
     end
 
@@ -360,6 +482,15 @@ function RaidCC:EvaluatePlate(nameplate, unit)
         state.overlay:Hide()
         state.retryCount = (state.retryCount or 0) + 1
         state.retryAt = Now()
+        local retryDecision = "waiting-compatible-frames:" .. tostring(state.retryCount)
+        if state.debugDecision ~= retryDecision then
+            state.debugDecision = retryDecision
+            self:Debug("plate decision=waiting-compatible-frames retry="
+                .. tostring(state.retryCount) .. " " .. UnitDescription(unit)
+                .. " full=" .. tostring(nameplate[FULL_FRAME_FIELD] ~= nil)
+                .. " lite=" .. tostring(nameplate[LITE_FRAME_FIELD] ~= nil)
+                .. " liteIcon=" .. tostring(nameplate[LITE_ICON_FIELD] ~= nil))
+        end
         if state.retryCount <= 2 then
             self:ScheduleGuardedRetry(nameplate, state)
         else
@@ -370,6 +501,11 @@ function RaidCC:EvaluatePlate(nameplate, unit)
 
     state.retryCount = 0
     state.retryScheduled = false
+    if state.debugDecision ~= "override-active" then
+        state.debugDecision = "override-active"
+        self:Debug("plate decision=override-active " .. UnitDescription(unit)
+            .. " isLite=" .. tostring(nameplate._isLite and true or false))
+    end
     self:ApplyOverride(nameplate, unit, state)
 end
 
@@ -384,8 +520,11 @@ end
 function RaidCC:OnPlateAdded(unit, suppliedNameplate)
     local nameplate = suppliedNameplate or GetPlateForUnit(unit)
     if not nameplate then
+        self:Debug("plate added but no frame was resolved " .. UnitDescription(unit))
         return
     end
+    self:Debug("plate added source=" .. (suppliedNameplate and "manager" or "event")
+        .. " " .. UnitDescription(unit))
     self.visiblePlates[nameplate] = true
     local state = self:GetState(nameplate)
     state.unit = unit
@@ -397,11 +536,14 @@ end
 function RaidCC:OnPlateRemoved(unit, suppliedNameplate)
     local nameplate = suppliedNameplate or self.unitToPlate[unit] or GetPlateForUnit(unit)
     if not nameplate then
+        self:Debug("plate removed but no tracked frame was resolved " .. UnitDescription(unit))
         return
     end
+    self:Debug("plate removed source=" .. (suppliedNameplate and "manager" or "event")
+        .. " " .. UnitDescription(unit))
     local state = nameplate._actuallyRaidCCState
     if state then
-        self:RemoveOverride(nameplate, true)
+        self:RemoveOverride(nameplate, true, "plate-removed")
         state.unit = nil
         state.guid = nil
         state.retryCount = 0
@@ -415,7 +557,9 @@ function RaidCC:DiscoverVisiblePlates()
     if not C_NamePlateManager or not C_NamePlateManager.EnumerateActiveNamePlates then
         return
     end
+    local discovered = 0
     for nameplate in C_NamePlateManager.EnumerateActiveNamePlates() do
+        discovered = discovered + 1
         self.visiblePlates[nameplate] = true
         local unit = nameplate._unit or nameplate._turboTrackedUnit
         if unit then
@@ -425,6 +569,8 @@ function RaidCC:DiscoverVisiblePlates()
             self.unitToPlate[unit] = nameplate
         end
     end
+    self:Debug("active plate discovery enumerated=" .. tostring(discovered)
+        .. " tracked=" .. tostring(CountTable(self.visiblePlates)))
 end
 
 function RaidCC:ReevaluateVisiblePlates()
@@ -445,13 +591,19 @@ function RaidCC:ForceRequiredCVars()
         return
     end
     self.cvarGuard = true
+    local changed = {}
     if self:GetCVarValue("nameplateShowFriends") ~= "1" then
         SetCVar("nameplateShowFriends", "1")
+        table.insert(changed, "friends")
     end
     if self:GetCVarValue("nameplateShowEnemies") ~= "1" then
         SetCVar("nameplateShowEnemies", "1")
+        table.insert(changed, "enemies")
     end
     self.cvarGuard = false
+    if #changed > 0 then
+        self:Debug("forced nameplate CVars: " .. table.concat(changed, ","))
+    end
 end
 
 function RaidCC:SaveCVarSnapshot()
@@ -464,6 +616,8 @@ function RaidCC:SaveCVarSnapshot()
         friends = self:GetCVarValue("nameplateShowFriends"),
         enemies = self:GetCVarValue("nameplateShowEnemies"),
     }
+    self:Debug("saved CVar snapshot friends=" .. tostring(self.db.cvarSnapshot.friends)
+        .. " enemies=" .. tostring(self.db.cvarSnapshot.enemies))
 end
 
 function RaidCC:RestoreCVars(clearSnapshot)
@@ -473,6 +627,9 @@ function RaidCC:RestoreCVars(clearSnapshot)
         SetCVar("nameplateShowFriends", snapshot.friends or "0")
         SetCVar("nameplateShowEnemies", snapshot.enemies or "0")
         self.cvarGuard = false
+        self:Debug("restored CVar snapshot friends=" .. tostring(snapshot.friends)
+            .. " enemies=" .. tostring(snapshot.enemies)
+            .. " clear=" .. tostring(clearSnapshot and true or false))
     end
     if clearSnapshot and self.db then
         self.db.cvarSnapshot = nil
@@ -488,6 +645,7 @@ function RaidCC:EnterActiveMode()
     end
     self:SaveCVarSnapshot()
     self.runtimeActive = true
+    self:Debug("entering active raid mode")
     self:ForceRequiredCVars()
     self:RebuildRaidGUIDCache()
     self:ReevaluateVisiblePlates()
@@ -495,9 +653,10 @@ end
 
 function RaidCC:LeaveActiveMode()
     for nameplate in pairs(self.visiblePlates) do
-        self:RemoveOverride(nameplate, false)
+        self:RemoveOverride(nameplate, false, "mode-disabled")
     end
     self.runtimeActive = false
+    self:Debug("leaving active raid mode")
     self:RestoreCVars(true)
     ClearTable(self.raidGUIDs)
 end
@@ -554,6 +713,9 @@ end
 
 function RaidCC:OnRosterChanged()
     local shouldBeActive = self:ShouldModeBeActive()
+    self:Debug("roster changed shouldBeActive=" .. tostring(shouldBeActive)
+        .. " runtime=" .. tostring(self.runtimeActive)
+        .. " raidCount=" .. tostring(RaidCount()))
     if not shouldBeActive then
         self:RefreshMode()
         return
@@ -602,22 +764,19 @@ function RaidCC:Initialize()
         ActuallyDB.raidCC.enabled = false
     end
     self.db = ActuallyDB.raidCC
+    if self.db.debug == nil then self.db.debug = false end
+    self.debugEnabled = self.db.debug == true
     self:BuildTrackedSpellNames()
     self:DiscoverVisiblePlates()
     self.initialized = true
     self:RefreshMode()
-    if self.Options and self.Options.Refresh then
-        self.Options:Refresh()
+    self:Debug("initialized")
+    if Addon.CacheTips and Addon.CacheTips.RefreshRaidCCToggle then
+        Addon.CacheTips:RefreshRaidCCToggle()
     end
 end
 
 local Events = {}
-
-function Events.ADDON_LOADED(loadedAddon)
-    if loadedAddon == Addon.name then
-        RaidCC:Initialize()
-    end
-end
 
 function Events.PLAYER_LOGIN()
     RaidCC:RefreshMode()
@@ -679,7 +838,7 @@ for event in pairs(Events) do
     pcall(RaidCC.eventFrame.RegisterEvent, RaidCC.eventFrame, event)
 end
 RaidCC.eventFrame:SetScript("OnEvent", function(_, event, ...)
-    if event ~= "ADDON_LOADED" and not RaidCC.initialized then
+    if not RaidCC.initialized then
         return
     end
     local handler = Events[event]
@@ -704,3 +863,11 @@ RaidCC.heartbeatFrame = CreateFrame("Frame")
 RaidCC.heartbeatFrame:SetScript("OnUpdate", function(_, elapsed)
     RaidCC:OnHeartbeat(elapsed)
 end)
+
+if SlashCmdList then
+    SLASH_ACTUALLYRAIDCC1 = "/raidcc"
+    SLASH_ACTUALLYRAIDCC2 = "/rcc"
+    SlashCmdList.ACTUALLYRAIDCC = function(input)
+        RaidCC:HandleCommand(input)
+    end
+end

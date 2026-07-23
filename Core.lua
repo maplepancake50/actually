@@ -7,7 +7,7 @@ local Util = Addon.Util or {}
 Addon.Util = Util
 
 Addon.name = addonName or "actually"
-Addon.version = "0.3.0"
+Addon.version = "0.3.2"
 Addon.MESSAGE_PREFIX = "ACTUALLY"
 Addon.tierOrder = { "S", "A", "B", "C", "D", "U" }
 Addon.DEFAULT_PERSONAL_LIST_NAME = "My Tier List"
@@ -64,7 +64,7 @@ function Util.SetBackdrop(frame, color, borderColor)
 end
 
 local defaults = {
-    version = 11,
+    version = 12,
     customSpells = {},
     spellTombstones = {},
     sync = {
@@ -103,6 +103,7 @@ local defaults = {
         dps = "",
         frontline = "",
     },
+    cacheTipsMeta = {},
     backups = {
         snapshots = {},
     },
@@ -197,6 +198,25 @@ local function InitializeListStorage(db)
     db.authority.updatedBy = tostring(db.authority.updatedBy or db.authority.owner or "")
     db.authority.changeID = tostring(db.authority.changeID or "")
     db.authority.stateVersion = 1
+    db.cacheTips = type(db.cacheTips) == "table" and db.cacheTips or {}
+    db.cacheTipsMeta = type(db.cacheTipsMeta) == "table" and db.cacheTipsMeta or {}
+    local playerIdentity = Addon.Official and Addon.Official:GetPlayerIdentity()
+        or (UnitName and UnitName("player")) or ""
+    local ownerIsPlayer = db.authority.owner
+        and Util.NormalizeIdentity(db.authority.owner) == Util.NormalizeIdentity(playerIdentity)
+    for _, role in ipairs({ "healer", "dps", "frontline" }) do
+        db.cacheTips[role] = tostring(db.cacheTips[role] or "")
+        local meta = type(db.cacheTipsMeta[role]) == "table" and db.cacheTipsMeta[role] or {}
+        if previousVersion < 12 and meta.authorityRevision == nil then
+            meta.updatedAt = ownerIsPlayer and (time and time() or 0) or 0
+            meta.updatedBy = ownerIsPlayer and playerIdentity or ""
+            meta.authorityRevision = db.authority.revision
+        end
+        meta.updatedAt = tonumber(meta.updatedAt) or 0
+        meta.updatedBy = tostring(meta.updatedBy or "")
+        meta.authorityRevision = tonumber(meta.authorityRevision) or db.authority.revision
+        db.cacheTipsMeta[role] = meta
+    end
     local official = db.lists.official
     if type(official.operations) ~= "table" then
         official.operations = {}
@@ -283,7 +303,7 @@ local function InitializeListStorage(db)
     end
 
     db.board = nil
-    db.version = 11
+    db.version = 12
 end
 
 function Addon:GetActiveList()
@@ -398,6 +418,9 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
     if Addon.FapAlert then
         Addon.FapAlert:Initialize()
     end
+    if Addon.RaidCC then
+        Addon.RaidCC:Initialize()
+    end
     if Addon.CacheTips then
         Addon.CacheTips:Create()
     end
@@ -413,6 +436,16 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
                 arc.DebugCommands:Handle(argument)
             else
                 Addon:Print("Actually Raid Cooldowns is not available")
+            end
+            return
+        end
+        if lowerMessage == "raidcc" or string.sub(lowerMessage, 1, 7) == "raidcc " then
+            local raidCC = Addon.RaidCC or (Addon.Modules and Addon.Modules.RaidCC)
+            if raidCC and type(raidCC.HandleCommand) == "function" then
+                local argument = lowerMessage == "raidcc" and "" or string.sub(rawMessage, 8)
+                raidCC:HandleCommand(argument)
+            else
+                Addon:Print("Actually Raid CC is not available")
             end
             return
         end
