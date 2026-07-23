@@ -46,6 +46,8 @@ function Bundles:Initialize()
     self.incoming = {}
     self.incomingOrder = {}
     self.activeIncomingID = nil
+    self.incomingLastSyncAt = nil
+    self.nextSyncAt = 0
     self.counter = 0
     self.remoteSequences = {}
     self:CreateAlert()
@@ -109,6 +111,7 @@ function Bundles:Start(name, spellIDs)
         failed = 0,
     }
     self.active = bundle
+    self.nextSyncAt = 0
     for index, spellID in ipairs(ordered) do
         local item = {
             id = bundle.id .. ":" .. tostring(index),
@@ -218,6 +221,7 @@ function Bundles:CheckFinished()
     ARC:Print("bundle " .. bundle.name .. " finished: "
         .. tostring(bundle.completed) .. " used, " .. tostring(bundle.failed) .. " failed")
     self.active = nil
+    self.nextSyncAt = nil
     ARC.Renderer:MarkDirty("bundle complete")
     ARC.Renderer:Reconcile()
     refreshConfig()
@@ -239,9 +243,11 @@ function Bundles:CancelActive(reason)
         self.activeIncomingID = nil
         self.incomingBundleID = nil
         self.incomingRequesterKey = nil
+        self.incomingLastSyncAt = nil
         self.alert:Hide()
     end
     self.active = nil
+    self.nextSyncAt = nil
     ARC:Print("bundle cancelled" .. (reason and ": " .. tostring(reason) or ""))
     ARC.Renderer:MarkDirty("bundle cancelled")
     ARC.Renderer:Reconcile()
@@ -314,6 +320,7 @@ function Bundles:ActivateNext()
             if activeIncomingCount(self.incoming) == 0 then
                 self.incomingBundleID = nil
                 self.incomingRequesterKey = nil
+                self.incomingLastSyncAt = nil
             end
             self.alert:Hide()
             return false
@@ -330,6 +337,7 @@ function Bundles:RemoveIncoming(itemID, suppressPromotion)
     if activeIncomingCount(self.incoming) == 0 then
         self.incomingBundleID = nil
         self.incomingRequesterKey = nil
+        self.incomingLastSyncAt = nil
         self.alert:Hide()
     elseif wasActive and not suppressPromotion then
         self:ActivateNext()
@@ -357,6 +365,7 @@ function Bundles:RejectAll(status)
     self.activeIncomingID = nil
     self.incomingBundleID = nil
     self.incomingRequesterKey = nil
+    self.incomingLastSyncAt = nil
     self.alert:Hide()
     for _, incoming in ipairs(pending) do
         self:SendStatus(incoming, status or "DECLINED")
@@ -393,6 +402,7 @@ function Bundles:OnRemoteRequest(requester, session, sequence, bundleID, bundleN
 
     self.incomingBundleID = bundleID
     self.incomingRequesterKey = requester.key
+    self.incomingLastSyncAt = ARC:Now()
     local incoming = {
         bundleID = bundleID,
         bundleName = bundleName,
@@ -441,6 +451,14 @@ function Bundles:OnRemoteCancel(requester, session, sequence, itemID, targetKey)
     if targetKey == selfKey and self.incoming[itemID] then self:RemoveIncoming(itemID) end
 end
 
+function Bundles:OnRemoteSync(requester, session, sequence, bundleID)
+    if not self:AcceptSequence(requester, session, sequence) then return end
+    if not ARC.Roster:IsCoordinator(requester) then return end
+    if self.incomingBundleID == bundleID and self.incomingRequesterKey == requester.key then
+        self.incomingLastSyncAt = ARC:Now()
+    end
+end
+
 function Bundles:OnLocalCast(spellID)
     local ids = {}
     for itemID, incoming in pairs(self.incoming) do
@@ -476,11 +494,19 @@ end
 
 function Bundles:OnUpdate(now)
     if not self.initialized then return end
+    local selfKey = ARC.Roster:GetPlayer()
     local bundle = self.active
     if bundle then
         if not ARC.Roster:IsLocalCoordinator() then
             self:CancelActive("coordinator authority lost")
         else
+            if now >= (self.nextSyncAt or 0) then
+                ARC.Comms:SendBundleSync(bundle.id)
+                self.nextSyncAt = now + ARC.Constants.BUNDLE_SYNC_INTERVAL
+            end
+            if self.incomingBundleID == bundle.id and self.incomingRequesterKey == selfKey then
+                self.incomingLastSyncAt = now
+            end
             local ids = {}
             for itemID in pairs(bundle.items) do table.insert(ids, itemID) end
             for _, itemID in ipairs(ids) do
@@ -506,9 +532,12 @@ function Bundles:OnUpdate(now)
         end
     end
 
-    local selfKey = ARC.Roster:GetPlayer()
     local player = ARC.State.players[selfKey]
-    if activeIncomingCount(self.incoming) > 0
+    if activeIncomingCount(self.incoming) > 0 and self.incomingRequesterKey ~= selfKey
+        and now - (self.incomingLastSyncAt or 0) > ARC.Constants.BUNDLE_SYNC_TIMEOUT then
+        ARC:Debug("cleared stale bundle queue after coordinator heartbeat expired")
+        self:RejectAll("UNAVAILABLE")
+    elseif activeIncomingCount(self.incoming) > 0
         and UnitIsDeadOrGhost and UnitIsDeadOrGhost("player") then
         self:RejectAll("DEAD")
     else
@@ -581,12 +610,23 @@ function Bundles:CreateAlert()
 end
 
 function Bundles:CreateOfficerSummary()
+    local profile = ARC.db.profile.bundleSummaryUI
     local frame = CreateFrame("Frame", "ActuallyARCBundleSummaryFrame", UIParent)
     frame:SetWidth(370)
     frame:SetHeight(150)
-    frame:SetPoint("TOP", UIParent, "TOP", 0, -180)
+    frame:SetPoint(profile.point or "TOP", UIParent, profile.point or "TOP",
+        profile.x or 0, profile.y or -180)
     frame:SetFrameStrata("FULLSCREEN_DIALOG")
     frame:SetClampedToScreen(true)
+    frame:SetMovable(true)
+    frame:EnableMouse(true)
+    frame:RegisterForDrag("LeftButton")
+    frame:SetScript("OnDragStart", function(self) self:StartMoving() end)
+    frame:SetScript("OnDragStop", function(self)
+        self:StopMovingOrSizing()
+        local point, _, _, x, y = self:GetPoint(1)
+        profile.point, profile.x, profile.y = point, x, y
+    end)
     setBackdrop(frame, { 0.020, 0.035, 0.050, 0.96 }, { 0.20, 0.76, 1.00, 1 })
 
     frame.heading = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -623,21 +663,58 @@ function Bundles:PlayAlertSound()
     return true
 end
 
+function Bundles:PlayFailureSound()
+    local now = ARC:Now()
+    if self.lastAlertSound and now - self.lastAlertSound <= 1 then return false end
+    self.lastAlertSound = now
+    if ARC.db.profile.requests.sound == false then return false end
+    if PlaySound then PlaySound("igQuestFailed")
+    elseif PlaySoundFile then PlaySoundFile("Sound\\Interface\\Error.wav") end
+    return true
+end
+
 function Bundles:ShowOfficerSummary(bundle)
     local frame = self.officerSummary
     if not frame or not bundle then return end
-    local lines = {}
+    local lines, assigned = {}, 0
     for _, spellID in ipairs(bundle.spellIDs or {}) do
+        local item
+        for _, candidate in pairs(bundle.items or {}) do
+            if candidate.spellID == spellID then item = candidate break end
+        end
         local icon = ARC.SpellInfo:ResolveSpellIcon(spellID)
         local prefix = icon and ("|T" .. tostring(icon) .. ":16:16:0:0|t ") or ""
-        table.insert(lines, prefix .. ARC.SpellInfo:ResolveSpellName(spellID))
+        if item and item.targetKey and item.status ~= "FAILED" then
+            assigned = assigned + 1
+            local target = ARC.State.players[item.targetKey]
+                or (ARC.Roster.byKey and ARC.Roster.byKey[item.targetKey])
+            table.insert(lines, prefix .. ARC.SpellInfo:ResolveSpellName(spellID)
+                .. "  |cff66ff88-> " .. shortName(target) .. "|r")
+        else
+            table.insert(lines, prefix .. ARC.SpellInfo:ResolveSpellName(spellID)
+                .. "  |cffff5555NOT SENT - no ready owner|r")
+        end
+    end
+    local total = table.getn(lines)
+    if assigned == 0 then
+        frame.heading:SetText("BUNDLE NOT SENT")
+        frame.heading:SetTextColor(1.00, 0.28, 0.28)
+        frame:SetBackdropBorderColor(0.85, 0.16, 0.16, 1)
+    elseif assigned < total then
+        frame.heading:SetText("BUNDLE PARTIALLY REQUESTED")
+        frame.heading:SetTextColor(1.00, 0.76, 0.20)
+        frame:SetBackdropBorderColor(0.90, 0.58, 0.12, 1)
+    else
+        frame.heading:SetText("COOLDOWN BUNDLE REQUESTED")
+        frame.heading:SetTextColor(0.32, 0.86, 1.00)
+        frame:SetBackdropBorderColor(0.20, 0.76, 1.00, 1)
     end
     frame.bundleName:SetText(tostring(bundle.name) .. "  |cff7fcfff("
-        .. tostring(table.getn(lines)) .. " spells)|r")
+        .. tostring(assigned) .. "/" .. tostring(total) .. " sent)|r")
     frame.spells:SetText(table.concat(lines, "\n"))
     frame:SetHeight(78 + math.max(1, table.getn(lines)) * 18)
     frame:Show()
-    self:PlayAlertSound()
+    if assigned > 0 then self:PlayAlertSound() else self:PlayFailureSound() end
 
     self.summaryToken = (self.summaryToken or 0) + 1
     local token = self.summaryToken

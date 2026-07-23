@@ -149,47 +149,23 @@ function TestUI:Initialize()
     frame.title:SetPoint("TOPLEFT", frame, "TOPLEFT", 8, -8)
     frame.title:SetText("Actually Raid Cooldowns")
 
-    frame.config = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    frame.config:SetWidth(52)
-    frame.config:SetHeight(18)
-    frame.config:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -7, -5)
-    frame.config:SetText("Config")
-    frame.config:SetScript("OnClick", function()
-        if ARC.SpellConfig and ARC.SpellConfig.Show then
-            ARC.SpellConfig:Show()
-        else
-            ARC:Print("SpellConfig unavailable; fully restart the game client")
-        end
-    end)
-
-    frame.bundles = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    frame.bundles:SetWidth(60)
-    frame.bundles:SetHeight(18)
-    frame.bundles:SetPoint("RIGHT", frame.config, "LEFT", -4, 0)
-    frame.bundles:SetText("Bundles")
-    frame.bundles:SetScript("OnClick", function()
-        if ARC.BundleConfig and ARC.BundleConfig.Show then
-            ARC.BundleConfig:Show()
-        else
-            ARC:Print("BundleConfig unavailable; fully restart the game client")
-        end
-    end)
-    frame.bundles:SetScript("OnEnter", function(button)
-        if ARC.BundleConfig and ARC.BundleConfig.ShowBundleTooltip then
-            ARC.BundleConfig:ShowBundleTooltip(button)
-        end
-    end)
-    frame.bundles:SetScript("OnLeave", function()
-        if ARC.BundleConfig and ARC.BundleConfig.HideBundleTooltip then
-            ARC.BundleConfig:HideBundleTooltip()
-        end
-    end)
-
     frame.lock = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
     frame.lock:SetWidth(52)
     frame.lock:SetHeight(18)
-    frame.lock:SetPoint("RIGHT", frame.bundles, "LEFT", -4, 0)
+    frame.lock:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -7, -5)
     frame.lock:SetScript("OnClick", function() self:ToggleLayoutLock() end)
+
+    frame.dragBar = CreateFrame("Frame", nil, frame)
+    frame.dragBar:SetPoint("TOPLEFT", frame, "TOPLEFT", 3, -3)
+    frame.dragBar:SetPoint("TOPRIGHT", frame.lock, "TOPLEFT", -4, 2)
+    frame.dragBar:SetHeight(22)
+    frame.dragBar:EnableMouse(true)
+    frame.dragBar:RegisterForDrag("LeftButton")
+    frame.dragBar:SetScript("OnDragStart", function() frame:StartMoving() end)
+    frame.dragBar:SetScript("OnDragStop", function()
+        frame:StopMovingOrSizing()
+        savePosition(frame, profile)
+    end)
 
     frame.resizeGrip = CreateFrame("Button", nil, frame)
     frame.resizeGrip:SetWidth(18)

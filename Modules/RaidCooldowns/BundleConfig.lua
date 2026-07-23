@@ -59,6 +59,12 @@ local function spellIconText(spellID)
     return "|T" .. tostring(icon) .. ":16:16:0:0|t "
 end
 
+local function playerShortName(player)
+    local name = type(player) == "table" and player.name or player
+    name = tostring(name or "Unknown")
+    return string.match(name, "^[^-]+") or name
+end
+
 local function statusColor(status)
     if status == "DONE" then return 0.35, 1.00, 0.35 end
     if status == "FAILED" then return 1.00, 0.35, 0.35 end
@@ -68,17 +74,61 @@ local function statusColor(status)
 end
 
 function BundleConfig:GetSelectedSpellIDs()
-    local ids = {}
-    for spellID, selected in pairs(self.selected or {}) do
-        if selected and ARC.Registry:Get(spellID) then table.insert(ids, spellID) end
+    local ids, seen = {}, {}
+    for _, spellID in ipairs(self.selectionOrder or {}) do
+        if self.selected and self.selected[spellID] and ARC.Registry:Get(spellID)
+            and not seen[spellID] then
+            seen[spellID] = true
+            table.insert(ids, spellID)
+        end
     end
-    table.sort(ids, function(left, right)
-        local leftName = string.lower(ARC.SpellInfo:ResolveSpellName(left))
-        local rightName = string.lower(ARC.SpellInfo:ResolveSpellName(right))
-        if leftName ~= rightName then return leftName < rightName end
-        return left < right
-    end)
-    return ids
+    for _, spellID in ipairs(self.spellIDs or {}) do
+        if self.selected and self.selected[spellID] and ARC.Registry:Get(spellID)
+            and not seen[spellID] then
+            seen[spellID] = true
+            table.insert(ids, spellID)
+        end
+    end
+    self.selectionOrder = ids
+    local copy = {}
+    for _, spellID in ipairs(ids) do table.insert(copy, spellID) end
+    return copy
+end
+
+function BundleConfig:GetSelectionIndex(spellID)
+    for index, selectedID in ipairs(self:GetSelectedSpellIDs()) do
+        if selectedID == spellID then return index end
+    end
+end
+
+function BundleConfig:SetSpellSelected(spellID, selected)
+    if not spellID or not ARC.Registry:Get(spellID) then return end
+    self.selected = self.selected or {}
+    self.selectionOrder = self.selectionOrder or {}
+    if selected then
+        self.selected[spellID] = true
+        if not self:GetSelectionIndex(spellID) then table.insert(self.selectionOrder, spellID) end
+    else
+        self.selected[spellID] = nil
+        for index = table.getn(self.selectionOrder), 1, -1 do
+            if self.selectionOrder[index] == spellID then table.remove(self.selectionOrder, index) end
+        end
+    end
+    self:Refresh()
+end
+
+function BundleConfig:MoveSelectedSpell(spellID, direction)
+    local ids = self:GetSelectedSpellIDs()
+    local current
+    for index, selectedID in ipairs(ids) do
+        if selectedID == spellID then current = index break end
+    end
+    if not current then return end
+    local target = math.max(1, math.min(table.getn(ids), current + direction))
+    if target == current then return end
+    ids[current], ids[target] = ids[target], ids[current]
+    self.selectionOrder = ids
+    self:Refresh()
 end
 
 function BundleConfig:GetCurrentBundleName()
@@ -100,12 +150,19 @@ function BundleConfig:ShowBundleTooltip(owner)
         GameTooltip:SetText(tostring(active.name), 0.32, 0.86, 1.00)
         GameTooltip:AddLine("Requested cooldowns", 0.72, 0.78, 0.88)
         local statuses = {}
-        for _, item in pairs(active.items or {}) do statuses[item.spellID] = item.status end
+        for _, item in pairs(active.items or {}) do statuses[item.spellID] = item end
         for _, spellID in ipairs(active.spellIDs or {}) do
-            local status = statuses[spellID] or "PENDING"
+            local item = statuses[spellID]
+            local status = item and item.status or "PENDING"
             local red, green, blue = statusColor(status)
+            local target = item and item.targetKey
+                and (ARC.State.players[item.targetKey]
+                    or (ARC.Roster.byKey and ARC.Roster.byKey[item.targetKey]))
+            local detail = target and playerShortName(target) or nil
+            detail = detail and (detail .. " - " .. status) or status
             GameTooltip:AddDoubleLine(spellIconText(spellID)
-                .. ARC.SpellInfo:ResolveSpellName(spellID), status, 1, 1, 1, red, green, blue)
+                .. ARC.SpellInfo:ResolveSpellName(spellID), detail,
+                1, 1, 1, red, green, blue)
         end
     else
         GameTooltip:SetText(self:GetCurrentBundleName(), 0.32, 0.86, 1.00)
@@ -125,8 +182,18 @@ function BundleConfig:ShowBundleTooltip(owner)
     GameTooltip:Show()
 end
 
-function BundleConfig:HideBundleTooltip()
+function BundleConfig:HideBundleTooltip(owner)
+    if owner and self.tooltipOwner ~= owner then return end
+    self.tooltipOwner = nil
     if GameTooltip then GameTooltip:Hide() end
+end
+
+function BundleConfig:UpdateBundleTooltip(owner, elapsed)
+    if self.tooltipOwner ~= owner then return end
+    owner.arcTooltipElapsed = (owner.arcTooltipElapsed or 0) + (elapsed or 0)
+    if owner.arcTooltipElapsed < 0.25 then return end
+    owner.arcTooltipElapsed = 0
+    self:ShowBundleTooltip(owner)
 end
 
 function BundleConfig:ApplyLayoutLock()
@@ -189,6 +256,7 @@ end
 function BundleConfig:NewBundle()
     self.editingIndex = nil
     self.selected = {}
+    self.selectionOrder = {}
     self.nameBox:SetText("")
     self.nameBox:ClearFocus()
     self.spellPage = 1
@@ -202,7 +270,13 @@ function BundleConfig:LoadBundle(index)
     local bundle = bundles[index]
     self.editingIndex = index
     self.selected = {}
-    for _, spellID in ipairs(bundle.spells or {}) do self.selected[spellID] = true end
+    self.selectionOrder = {}
+    for _, spellID in ipairs(bundle.spells or {}) do
+        if ARC.Registry:Get(spellID) and not self.selected[spellID] then
+            self.selected[spellID] = true
+            table.insert(self.selectionOrder, spellID)
+        end
+    end
     self.nameBox:SetText(bundle.name or "")
     self.nameBox:ClearFocus()
     self.spellPage = 1
@@ -210,11 +284,7 @@ function BundleConfig:LoadBundle(index)
 end
 
 function BundleConfig:SaveBundle()
-    local ids = {}
-    for spellID, selected in pairs(self.selected or {}) do
-        if selected and ARC.Registry:Get(spellID) then table.insert(ids, spellID) end
-    end
-    table.sort(ids)
+    local ids = self:GetSelectedSpellIDs()
     if table.getn(ids) == 0 then ARC:Print("select at least one cooldown for the bundle") return nil end
     if table.getn(ids) > ARC.Constants.MAX_BUNDLE_SPELLS then
         ARC:Print("bundles can contain at most "
@@ -274,7 +344,7 @@ function BundleConfig:CreateRow(index)
     row.check:SetHeight(24)
     row.check:SetPoint("LEFT", row, "LEFT", 7, 0)
     row.check:SetScript("OnClick", function(button)
-        if row.spellID then self.selected[row.spellID] = button:GetChecked() and true or nil end
+        if row.spellID then self:SetSpellSelected(row.spellID, button:GetChecked() and true or false) end
     end)
 
     row.icon = row:CreateTexture(nil, "ARTWORK")
@@ -283,15 +353,33 @@ function BundleConfig:CreateRow(index)
     row.icon:SetPoint("LEFT", row.check, "RIGHT", 4, 0)
     row.icon:SetTexCoord(0.08, 0.92, 0.08, 0.92)
 
+    row.down = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+    row.down:SetWidth(22)
+    row.down:SetHeight(20)
+    row.down:SetPoint("RIGHT", row, "RIGHT", -6, 0)
+    row.down:SetText("v")
+    row.down:SetScript("OnClick", function()
+        if row.spellID then self:MoveSelectedSpell(row.spellID, 1) end
+    end)
+
+    row.up = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+    row.up:SetWidth(22)
+    row.up:SetHeight(20)
+    row.up:SetPoint("RIGHT", row.down, "LEFT", -2, 0)
+    row.up:SetText("^")
+    row.up:SetScript("OnClick", function()
+        if row.spellID then self:MoveSelectedSpell(row.spellID, -1) end
+    end)
+
     row.name = row:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     row.name:SetPoint("TOPLEFT", row.icon, "TOPRIGHT", 8, -1)
-    row.name:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+    row.name:SetPoint("RIGHT", row.up, "LEFT", -6, 0)
     row.name:SetHeight(16)
     row.name:SetJustifyH("LEFT")
 
     row.meta = row:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     row.meta:SetPoint("BOTTOMLEFT", row.icon, "BOTTOMRIGHT", 8, 5)
-    row.meta:SetPoint("RIGHT", row, "RIGHT", -8, 0)
+    row.meta:SetPoint("RIGHT", row.up, "LEFT", -6, 0)
     row.meta:SetHeight(14)
     row.meta:SetJustifyH("LEFT")
     row.meta:SetTextColor(0.47, 0.68, 0.78)
@@ -328,9 +416,21 @@ function BundleConfig:Refresh()
             row.spellID = spellID
             row.icon:SetTexture(ARC.SpellInfo:ResolveSpellIcon(spellID))
             row.name:SetText(ARC.SpellInfo:ResolveSpellName(spellID))
-            row.meta:SetText("ID " .. tostring(spellID) .. "  |  "
+            local orderIndex = self:GetSelectionIndex(spellID)
+            row.meta:SetText((orderIndex and ("Order " .. tostring(orderIndex) .. "  |  ") or "")
+                .. "ID " .. tostring(spellID) .. "  |  "
                 .. tostring(entry and entry.category or "uncategorized"))
             row.check:SetChecked(self.selected[spellID] and true or false)
+            if orderIndex then
+                local count = table.getn(self:GetSelectedSpellIDs())
+                row.up:Show()
+                row.down:Show()
+                if orderIndex > 1 then row.up:Enable() else row.up:Disable() end
+                if orderIndex < count then row.down:Enable() else row.down:Disable() end
+            else
+                row.up:Hide()
+                row.down:Hide()
+            end
             row:Show()
         else
             row.spellID = nil
@@ -342,13 +442,9 @@ function BundleConfig:Refresh()
     if self.spellPage < pages then self.nextPage:Enable() else self.nextPage:Disable() end
     if self.editingIndex then self.delete:Enable() else self.delete:Disable() end
     if ARC.Bundles.active then
-        self.request:SetText("BUNDLE ACTIVE")
-        self.request:Disable()
         self.cancel:SetText("Cancel Active")
         self.cancel:Enable()
     else
-        self.request:SetText("REQUEST BUNDLE")
-        self.request:Enable()
         self.cancel:SetText("Cancel Active")
         self.cancel:Disable()
     end
@@ -357,6 +453,7 @@ end
 function BundleConfig:Initialize()
     self.rows = {}
     self.selected = {}
+    self.selectionOrder = {}
     self.spellIDs = sortedSpellIDs()
     self.spellPage = 1
     local profile = ARC.db.profile.bundleUI
@@ -387,9 +484,21 @@ function BundleConfig:Initialize()
     frame.title:SetText("Actually Raid Cooldowns - CD Bundles")
     frame.title:SetTextColor(0.92, 0.96, 1.00)
 
+    frame.dragBar = CreateFrame("Frame", nil, frame)
+    frame.dragBar:SetPoint("TOPLEFT", frame, "TOPLEFT", 3, -3)
+    frame.dragBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -94, -3)
+    frame.dragBar:SetHeight(54)
+    frame.dragBar:EnableMouse(true)
+    frame.dragBar:RegisterForDrag("LeftButton")
+    frame.dragBar:SetScript("OnDragStart", function() frame:StartMoving() end)
+    frame.dragBar:SetScript("OnDragStop", function()
+        frame:StopMovingOrSizing()
+        savePosition(frame, profile)
+    end)
+
     frame.subtitle = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     frame.subtitle:SetPoint("TOPLEFT", frame.title, "BOTTOMLEFT", 0, -5)
-    frame.subtitle:SetText("Save a group of spells, then assign every ready cooldown at once")
+    frame.subtitle:SetText("Save spells in prompt order; use ^ and v to change their sequence")
     frame.subtitle:SetTextColor(0.58, 0.50, 0.72)
 
     frame.close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
@@ -489,19 +598,10 @@ function BundleConfig:Initialize()
     self.delete:SetText("Delete")
     self.delete:SetScript("OnClick", function() self:DeleteBundle() end)
 
-    self.request = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    self.request:SetWidth(120)
-    self.request:SetHeight(22)
-    self.request:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 10)
-    self.request:SetText("REQUEST BUNDLE")
-    self.request:SetScript("OnClick", function() self:RequestBundle() end)
-    self.request:SetScript("OnEnter", function(button) self:ShowBundleTooltip(button) end)
-    self.request:SetScript("OnLeave", function() self:HideBundleTooltip() end)
-
     self.cancel = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    self.cancel:SetWidth(88)
+    self.cancel:SetWidth(100)
     self.cancel:SetHeight(22)
-    self.cancel:SetPoint("RIGHT", self.request, "LEFT", -5, 0)
+    self.cancel:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 10)
     self.cancel:SetText("Cancel Active")
     self.cancel:SetScript("OnClick", function()
         ARC.Bundles:CancelActive("cancelled by coordinator")

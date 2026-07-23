@@ -289,7 +289,7 @@ function Debug:FindHiddenTalents()
 end
 
 function Debug:Help()
-    ARC:Print("commands: config, bundles, ui, spoof, probe, apiprobe <id>, findhidden, scan, state, peers, request, test, debug, dumpbook [filter], dumptalents [filter]")
+    ARC:Print("/act arc commands: config, bundles, ui, spoof, probe, apiprobe <id>, findhidden, scan, state, peers, request, test, debug, dumpbook [filter], dumptalents [filter]")
 end
 
 function Debug:Handle(input)

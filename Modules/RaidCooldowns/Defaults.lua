@@ -40,6 +40,11 @@ ARC.Defaults = {
             x = 0,
             y = 150,
         },
+        bundleSummaryUI = {
+            point = "TOP",
+            x = 0,
+            y = -180,
+        },
         bundleUI = {
             point = "CENTER",
             x = 0,

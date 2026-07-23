@@ -122,6 +122,10 @@ function Comms:SendBundleCancel(itemID, targetKey)
         itemID, targetKey)
 end
 
+function Comms:SendBundleSync(bundleID)
+    return self:Send("BUNDLE_SYNC", "NORMAL", self.session, self:NextSequence(), bundleID)
+end
+
 function Comms:SchedulePeriodicReport()
     local delay = math.random(25, 35)
     self.periodicTimer = ARC:ScheduleTimer(function()
@@ -244,5 +248,9 @@ function Comms:OnCommReceived(prefix, message, distribution, sender)
         local itemID, targetKey = decoded[6], decoded[7]
         if not validString(itemID, 140) or not validString(targetKey, 100) then return end
         ARC.Bundles:OnRemoteCancel(identity, session, sequence, itemID, targetKey)
+    elseif messageType == "BUNDLE_SYNC" then
+        local bundleID = decoded[6]
+        if not validString(bundleID, 120) then return end
+        ARC.Bundles:OnRemoteSync(identity, session, sequence, bundleID)
     end
 end
