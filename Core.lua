@@ -7,7 +7,7 @@ local Util = Addon.Util or {}
 Addon.Util = Util
 
 Addon.name = addonName or "actually"
-Addon.version = "0.3.2"
+Addon.version = "0.3.4"
 Addon.MESSAGE_PREFIX = "ACTUALLY"
 Addon.tierOrder = { "S", "A", "B", "C", "D", "U" }
 Addon.DEFAULT_PERSONAL_LIST_NAME = "My Tier List"
@@ -69,6 +69,7 @@ local defaults = {
     spellTombstones = {},
     sync = {
         knownPeers = {},
+        directPeers = {},
     },
     assistLog = {
         fights = {},
@@ -265,6 +266,7 @@ local function InitializeListStorage(db)
     db.spellTombstones = type(db.spellTombstones) == "table" and db.spellTombstones or {}
     db.sync = type(db.sync) == "table" and db.sync or {}
     db.sync.knownPeers = type(db.sync.knownPeers) == "table" and db.sync.knownPeers or {}
+    db.sync.directPeers = type(db.sync.directPeers) == "table" and db.sync.directPeers or {}
     db.assistLog = type(db.assistLog) == "table" and db.assistLog or {}
     db.assistLog.fights = type(db.assistLog.fights) == "table" and db.assistLog.fights or {}
     db.assistLog.pendingUploads = type(db.assistLog.pendingUploads) == "table"

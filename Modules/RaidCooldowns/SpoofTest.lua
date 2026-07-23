@@ -17,18 +17,6 @@ local function sortedRegistryIDs()
     return ids
 end
 
-local function parseCooldownLine(text)
-    if type(text) ~= "string" then return nil end
-    text = string.lower(text)
-    if not string.find(text, "cooldown", 1, true) then return nil end
-    local hours = tonumber(string.match(text, "([%d%.]+)%s*h"))
-        or tonumber(string.match(text, "([%d%.]+)%s*hour"))
-    local minutes = tonumber(string.match(text, "([%d%.]+)%s*min"))
-    local seconds = tonumber(string.match(text, "([%d%.]+)%s*sec"))
-    local duration = (hours or 0) * 3600 + (minutes or 0) * 60 + (seconds or 0)
-    return duration > 0 and duration or nil
-end
-
 local function formatDuration(seconds)
     seconds = math.floor((tonumber(seconds) or 0) + 0.5)
     if seconds >= 3600 and seconds % 3600 == 0 then
@@ -43,35 +31,8 @@ local function formatDuration(seconds)
 end
 
 function SpoofTest:GetSpellCooldownDuration(spellID)
-    self.cooldownCache = self.cooldownCache or {}
-    if self.cooldownCache[spellID] then return self.cooldownCache[spellID] end
-
-    local duration
-    local tooltip = self.scanTooltip
-    if tooltip then
-        tooltip:ClearLines()
-        local ok = pcall(tooltip.SetHyperlink, tooltip, "spell:" .. tostring(spellID))
-        if ok then
-            local tooltipName = tooltip:GetName()
-            for index = 1, tooltip:NumLines() do
-                local left = _G[tooltipName .. "TextLeft" .. tostring(index)]
-                local right = _G[tooltipName .. "TextRight" .. tostring(index)]
-                duration = left and parseCooldownLine(left:GetText())
-                    or right and parseCooldownLine(right:GetText())
-                if duration then break end
-            end
-        end
-        tooltip:Hide()
-    end
-
-    local entry = ARC.Registry:Get(spellID)
-    duration = duration or (entry and tonumber(entry.fallbackCD))
-    if duration and duration > 0 then
-        duration = math.min(duration, ARC.Constants.MAX_COOLDOWN)
-        self.cooldownCache[spellID] = duration
-        return duration
-    end
-    return nil
+    local duration = tonumber(ARC.db.profile.spoofUI.duration) or 30
+    return math.max(1, math.min(duration, ARC.Constants.MAX_COOLDOWN))
 end
 
 function SpoofTest:Use(spellID)
@@ -80,11 +41,6 @@ function SpoofTest:Use(spellID)
         return false
     end
     local duration = self:GetSpellCooldownDuration(spellID)
-    if not duration then
-        ARC:Print("SpoofTest could not read the real cooldown for "
-            .. ARC.SpellInfo:ResolveSpellName(spellID) .. "; no spoof was sent")
-        return false
-    end
     local now = ARC:Now()
     local playerKey, identity = ARC.Roster:GetPlayer()
     if not playerKey then return end
@@ -108,7 +64,7 @@ function SpoofTest:Use(spellID)
         ARC.Comms:ScheduleState(0.2, "spoof cast")
     end
     ARC:Print("SpoofTest used " .. ARC.SpellInfo:ResolveSpellName(spellID)
-        .. " (" .. tostring(spellID) .. ") with its real "
+        .. " (" .. tostring(spellID) .. ") with a simulated "
         .. tostring(duration) .. " sec cooldown")
     self.resetToken = (self.resetToken or 0) + 1
     local token = self.resetToken
@@ -173,15 +129,9 @@ function SpoofTest:Refresh()
             row.icon:SetTexture(ARC.SpellInfo:ResolveSpellIcon(spellID))
             row.label:SetText(ARC.SpellInfo:ResolveSpellName(spellID)
                 .. "  |cff888888" .. spellID .. "|r  "
-                .. (duration and ("|cff66ccff" .. formatDuration(duration) .. "|r")
-                    or "|cffff6666CD unavailable|r"))
-            if duration then
-                row.button:Enable()
-                row.button:SetScript("OnClick", function() self:Use(spellID) end)
-            else
-                row.button:Disable()
-                row.button:SetScript("OnClick", nil)
-            end
+                .. "|cff66ccff" .. formatDuration(duration) .. "|r")
+            row.button:Enable()
+            row.button:SetScript("OnClick", function() self:Use(spellID) end)
             row:Show()
         else
             row:Hide()
@@ -196,7 +146,7 @@ function SpoofTest:Initialize()
     self.rows = {}
     self.page = 1
     local profile = ARC.db.profile.spoofUI
-    profile.duration = nil
+    profile.duration = tonumber(profile.duration) or 30
     local frame = CreateFrame("Frame", "ActuallyARCSpoofTestFrame", UIParent)
     frame:SetWidth(355)
     frame:SetHeight(373)
@@ -228,11 +178,33 @@ function SpoofTest:Initialize()
 
     frame.cooldownNote = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     frame.cooldownNote:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -34)
-    frame.cooldownNote:SetText("Uses each spell's real tooltip cooldown.")
+    frame.cooldownNote:SetText("Fake cooldown:")
 
-    self.scanTooltip = CreateFrame("GameTooltip", "ActuallyARCSpoofCooldownTooltip",
-        UIParent, "GameTooltipTemplate")
-    self.scanTooltip:SetOwner(UIParent, "ANCHOR_NONE")
+    self.durationInput = CreateFrame("EditBox", nil, frame, "InputBoxTemplate")
+    self.durationInput:SetWidth(42)
+    self.durationInput:SetHeight(20)
+    self.durationInput:SetPoint("LEFT", frame.cooldownNote, "RIGHT", 8, 0)
+    self.durationInput:SetAutoFocus(false)
+    self.durationInput:SetNumeric(true)
+    self.durationInput:SetMaxLetters(4)
+    self.durationInput:SetText(tostring(profile.duration))
+    self.durationInput:SetScript("OnEnterPressed", function(editBox)
+        local duration = tonumber(editBox:GetText())
+        if not duration or duration < 1 then duration = 30 end
+        duration = math.floor(math.min(duration, ARC.Constants.MAX_COOLDOWN) + 0.5)
+        profile.duration = duration
+        editBox:SetText(tostring(duration))
+        editBox:ClearFocus()
+        self:Refresh()
+    end)
+    self.durationInput:SetScript("OnEscapePressed", function(editBox)
+        editBox:SetText(tostring(profile.duration))
+        editBox:ClearFocus()
+    end)
+
+    frame.cooldownUnit = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    frame.cooldownUnit:SetPoint("LEFT", self.durationInput, "RIGHT", 5, 0)
+    frame.cooldownUnit:SetText("seconds (press Enter)")
 
     self.previous = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
     self.previous:SetWidth(58)

@@ -18,6 +18,7 @@ ARC.Defaults = {
             point = "CENTER",
             x = 320,
             y = 0,
+            duration = 30,
         },
         configUI = {
             point = "CENTER",

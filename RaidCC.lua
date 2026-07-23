@@ -22,13 +22,32 @@ local FULL_FRAME_FIELD = "myPlate"
 local LITE_FRAME_FIELD = "liteContainer"
 local LITE_ICON_FIELD = "liteQuestIcon"
 
+local CC_CYCLONE = "cyclone"
+local CC_SHADOWFURY = "shadowfury"
+local CC_ARROW_COLORS = {
+    [CC_CYCLONE] = { 0.15, 1.00, 0.25 },
+    [CC_SHADOWFURY] = { 0.72, 0.20, 1.00 },
+}
+local CC_PRIORITY = {
+    [CC_CYCLONE] = 2,
+    [CC_SHADOWFURY] = 1,
+}
+
+-- Match TurboPlates' own conflict audit. Ascension_NamePlates is represented
+-- by useNewNameplates rather than a normally loaded addon.
+local INCOMPATIBLE_NAMEPLATE_ADDONS = {
+    "Kui_Nameplates",
+    "TidyPlates_ThreatPlates",
+    "PlateBuffs",
+}
+
 local trackedSpellIDs = {
-    [33786] = true, -- Cyclone
-    [30283] = true, -- Shadowfury (rank 1)
-    [30413] = true, -- Shadowfury (rank 2)
-    [30414] = true, -- Shadowfury (rank 3)
-    [47846] = true, -- Shadowfury (rank 4)
-    [47847] = true, -- Shadowfury (rank 5)
+    [33786] = CC_CYCLONE, -- Cyclone
+    [30283] = CC_SHADOWFURY, -- Shadowfury (rank 1)
+    [30413] = CC_SHADOWFURY, -- Shadowfury (rank 2)
+    [30414] = CC_SHADOWFURY, -- Shadowfury (rank 3)
+    [47846] = CC_SHADOWFURY, -- Shadowfury (rank 4)
+    [47847] = CC_SHADOWFURY, -- Shadowfury (rank 5)
 }
 
 RaidCC.trackedSpellIDs = trackedSpellIDs
@@ -41,6 +60,8 @@ RaidCC.initialized = false
 RaidCC.cvarGuard = false
 RaidCC.elapsed = 0
 RaidCC.lastWarningAt = -WARNING_INTERVAL
+RaidCC.lastEnvironmentWarningAt = -WARNING_INTERVAL
+RaidCC.lastEnvironmentWarningCode = nil
 RaidCC.debugEnabled = false
 
 local function ClearTable(value)
@@ -78,6 +99,30 @@ local function IsRaid()
         return IsInRaid() and true or false
     end
     return GetNumRaidMembers and (GetNumRaidMembers() or 0) > 0 or false
+end
+
+local function IsNamedAddOnLoaded(name)
+    if not IsAddOnLoaded then
+        return false
+    end
+    local ok, loaded = pcall(IsAddOnLoaded, name)
+    return ok and loaded and true or false
+end
+
+local function GetBooleanCVar(name)
+    if C_CVar and C_CVar.GetBool then
+        local ok, value = pcall(C_CVar.GetBool, name)
+        if ok then
+            return value == true or value == 1 or value == "1"
+        end
+    end
+    if GetCVar then
+        local ok, value = pcall(GetCVar, name)
+        if ok then
+            return value == true or value == 1 or value == "1"
+        end
+    end
+    return false
 end
 
 local function RaidCount()
@@ -124,6 +169,71 @@ function RaidCC:SetDebug(enabled)
     if self.debugEnabled then self:PrintStatus() end
 end
 
+function RaidCC:GetCompatibilityStatus()
+    if not IsNamedAddOnLoaded("TurboPlates") then
+        return false, "turboplates-not-loaded",
+            "TurboPlates is not enabled for this character. Enable it and reload the UI."
+    end
+
+    if GetBooleanCVar("useNewNameplates") then
+        return false, "ascension-nameplates",
+            "Ascension New Nameplates is enabled. Disable it and reload the UI so TurboPlates can own the plates."
+    end
+
+    local elvEngine = ElvUI and ElvUI[1]
+    if elvEngine
+        and elvEngine.private
+        and elvEngine.private.nameplates
+        and elvEngine.private.nameplates.enable then
+        return false, "elvui-nameplates",
+            "ElvUI NamePlates is enabled. Disable only ElvUI's NamePlates module and reload the UI."
+    end
+
+    for _, addonName in ipairs(INCOMPATIBLE_NAMEPLATE_ADDONS) do
+        if IsNamedAddOnLoaded(addonName) then
+            return false, "conflict-" .. string.lower(addonName),
+                addonName .. " is loaded and conflicts with TurboPlates. Disable it and reload the UI."
+        end
+    end
+
+    if not C_NamePlate
+        or not C_NamePlate.GetNamePlateForUnit
+        or not C_NamePlateManager
+        or not C_NamePlateManager.EnumerateActiveNamePlates then
+        return false, "nameplate-api-missing",
+            "The required Ascension nameplate-manager APIs are unavailable."
+    end
+
+    return true, "ready", "TurboPlates is loaded and ready."
+end
+
+function RaidCC:GetRuntimeStatus()
+    if not self:IsEnabled() then
+        return "disabled", "Disabled. Your normal nameplate settings are unchanged."
+    end
+
+    local compatible, _, message = self:GetCompatibilityStatus()
+    if not compatible then
+        return "blocked", "Unavailable: " .. message
+    end
+
+    if not IsRaid() then
+        return "waiting", "Ready. It activates automatically in raids and battlegrounds."
+    end
+
+    if self.runtimeActive then
+        return "active", "Active: raid members are name-only and tracked CC displays an arrow."
+    end
+
+    return "waiting", "Preparing the raid nameplate override."
+end
+
+function RaidCC:RefreshOptionsStatus()
+    if Addon.CacheTips and Addon.CacheTips.RefreshRaidCCToggle then
+        Addon.CacheTips:RefreshRaidCCToggle()
+    end
+end
+
 function RaidCC:PrintStatus()
     local active, compatible, retrying = 0, 0, 0
     for nameplate in pairs(self.visiblePlates or {}) do
@@ -132,11 +242,12 @@ function RaidCC:PrintStatus()
         if state and state.active then active = active + 1 end
         if state and state.retryAt then retrying = retrying + 1 end
     end
-    local turboLoaded = IsAddOnLoaded and IsAddOnLoaded("TurboPlates")
+    local environmentCompatible, environmentCode = self:GetCompatibilityStatus()
     self:Print("status enabled=" .. tostring(self.db and self.db.enabled == true)
         .. " inRaid=" .. tostring(IsRaid())
         .. " runtime=" .. tostring(self.runtimeActive)
-        .. " turboPlates=" .. tostring(turboLoaded and true or false)
+        .. " environment=" .. tostring(environmentCode)
+        .. " environmentCompatible=" .. tostring(environmentCompatible)
         .. " raidGUIDs=" .. tostring(CountTable(self.raidGUIDs))
         .. " visible=" .. tostring(CountTable(self.visiblePlates))
         .. " compatible=" .. tostring(compatible)
@@ -170,8 +281,27 @@ function RaidCC:WarnCompatibility()
     self:Print("compatible TurboPlates plate fields were not found; raid override was skipped")
 end
 
-function RaidCC:ShouldModeBeActive()
+function RaidCC:WarnEnvironment(code, message)
+    local current = Now()
+    if self.lastEnvironmentWarningCode == code
+        and current - self.lastEnvironmentWarningAt < WARNING_INTERVAL then
+        return
+    end
+    self.lastEnvironmentWarningCode = code
+    self.lastEnvironmentWarningAt = current
+    self:Print("inactive: " .. tostring(message))
+end
+
+function RaidCC:IsModeRequested()
     return self.db and self.db.enabled == true and IsRaid()
+end
+
+function RaidCC:ShouldModeBeActive()
+    if not self:IsModeRequested() then
+        return false
+    end
+    local compatible = self:GetCompatibilityStatus()
+    return compatible and true or false
 end
 
 function RaidCC:IsEnabled()
@@ -184,10 +314,17 @@ function RaidCC:SetEnabled(enabled)
     end
     self.db.enabled = enabled and true or false
     self:RefreshMode()
-    self:ReevaluateVisiblePlates()
-    if Addon.CacheTips and Addon.CacheTips.RefreshRaidCCToggle then
-        Addon.CacheTips:RefreshRaidCCToggle()
+    if self.runtimeActive then
+        self:ReevaluateVisiblePlates()
+    elseif enabled then
+        local compatible, code, message = self:GetCompatibilityStatus()
+        if not compatible then
+            self:WarnEnvironment(code, message)
+        elseif not IsRaid() then
+            self:Print("enabled; waiting for a raid or battleground")
+        end
     end
+    self:RefreshOptionsStatus()
 end
 
 function RaidCC:RebuildRaidGUIDCache()
@@ -255,10 +392,20 @@ function RaidCC:CreateOverlay(nameplate)
     nameText:SetFont(STANDARD_TEXT_FONT or "Fonts\\FRIZQT__.TTF", 12, "OUTLINE")
     overlay.nameText = nameText
 
+    local arrowShadow = overlay:CreateTexture(nil, "ARTWORK")
+    arrowShadow:SetTexture(ARROW_TEXTURE)
+    arrowShadow:SetSize(38, 38)
+    arrowShadow:SetPoint("BOTTOM", nameText, "TOP", 2, 2)
+    arrowShadow:SetVertexColor(0, 0, 0, 1)
+    arrowShadow:SetAlpha(0.80)
+    arrowShadow:Hide()
+    overlay.arrowShadow = arrowShadow
+
     local arrow = overlay:CreateTexture(nil, "OVERLAY")
     arrow:SetTexture(ARROW_TEXTURE)
-    arrow:SetSize(36, 36)
+    arrow:SetSize(38, 38)
     arrow:SetPoint("BOTTOM", nameText, "TOP", 0, 4)
+    arrow:SetVertexColor(1, 1, 1, 1)
     arrow:Hide()
     overlay.arrow = arrow
 
@@ -279,6 +426,7 @@ function RaidCC:GetState(nameplate)
             retryScheduled = false,
             debugDecision = nil,
             arrowShown = false,
+            arrowKind = nil,
         }
         nameplate._actuallyRaidCCState = state
     end
@@ -379,8 +527,11 @@ function RaidCC:RemoveOverride(nameplate, plateIsBeingRemoved, reason)
     state.active = false
     state.retryAt = nil
     state.retryScheduled = false
+    state.arrowShown = false
+    state.arrowKind = nil
     if state.overlay then
         state.overlay.arrow:Hide()
+        state.overlay.arrowShadow:Hide()
         state.overlay:Hide()
     end
     if wasActive then
@@ -406,16 +557,28 @@ function RaidCC:HasTrackedCC(unit)
     if not unit or not UnitExists(unit) then
         return false
     end
+    local bestKind
+    local bestName
+    local bestSpellID
+    local bestPriority = 0
     for index = 1, 40 do
         local name, _, _, _, _, _, _, _, _, _, spellID = UnitDebuff(unit, index)
         if not name then
             break
         end
-        if (spellID and trackedSpellIDs[spellID]) or self.trackedSpellNames[name] then
-            return true, name, spellID
+        local kind = (spellID and trackedSpellIDs[spellID]) or self.trackedSpellNames[name]
+        local priority = kind and CC_PRIORITY[kind] or 0
+        if priority > bestPriority then
+            bestKind = kind
+            bestName = name
+            bestSpellID = spellID
+            bestPriority = priority
         end
     end
-    return false
+    if bestKind then
+        return true, bestKind, bestName, bestSpellID
+    end
+    return false, nil, nil, nil
 end
 
 function RaidCC:UpdateArrow(state)
@@ -424,17 +587,23 @@ function RaidCC:UpdateArrow(state)
         and UnitExists(state.unit)
         and UnitGUID(state.unit) == state.guid
         and self.raidGUIDs[state.guid] == true
-    local hasCC, spellName, spellID = valid and self:HasTrackedCC(state.unit)
+    local hasCC, kind, spellName, spellID = valid and self:HasTrackedCC(state.unit)
     if hasCC then
+        local color = CC_ARROW_COLORS[kind] or { 1, 1, 1 }
+        state.overlay.arrow:SetVertexColor(color[1], color[2], color[3], 1)
+        state.overlay.arrowShadow:Show()
         state.overlay.arrow:Show()
     else
         state.overlay.arrow:Hide()
+        state.overlay.arrowShadow:Hide()
     end
-    if state.arrowShown ~= (hasCC and true or false) then
-        state.arrowShown = hasCC and true or false
-        self:Debug("CC arrow " .. (state.arrowShown and "shown" or "hidden")
+    local shown = hasCC and true or false
+    if state.arrowShown ~= shown or state.arrowKind ~= kind then
+        state.arrowShown = shown
+        state.arrowKind = kind
+        self:Debug("CC arrow " .. (shown and ("shown:" .. tostring(kind)) or "hidden")
             .. " " .. UnitDescription(state.unit)
-            .. (state.arrowShown and (" spell=" .. tostring(spellName)
+            .. (shown and (" spell=" .. tostring(spellName)
                 .. " spellID=" .. tostring(spellID)) or ""))
     end
 end
@@ -592,18 +761,25 @@ function RaidCC:ForceRequiredCVars()
     end
     self.cvarGuard = true
     local changed = {}
-    if self:GetCVarValue("nameplateShowFriends") ~= "1" then
-        SetCVar("nameplateShowFriends", "1")
-        table.insert(changed, "friends")
-    end
-    if self:GetCVarValue("nameplateShowEnemies") ~= "1" then
-        SetCVar("nameplateShowEnemies", "1")
-        table.insert(changed, "enemies")
-    end
+    local ok, reason = pcall(function()
+        if self:GetCVarValue("nameplateShowFriends") ~= "1" then
+            SetCVar("nameplateShowFriends", "1")
+            table.insert(changed, "friends")
+        end
+        if self:GetCVarValue("nameplateShowEnemies") ~= "1" then
+            SetCVar("nameplateShowEnemies", "1")
+            table.insert(changed, "enemies")
+        end
+    end)
     self.cvarGuard = false
+    if not ok then
+        self:Print("could not enable required nameplate settings: " .. tostring(reason))
+        return false
+    end
     if #changed > 0 then
         self:Debug("forced nameplate CVars: " .. table.concat(changed, ","))
     end
+    return true
 end
 
 function RaidCC:SaveCVarSnapshot()
@@ -624,9 +800,15 @@ function RaidCC:RestoreCVars(clearSnapshot)
     local snapshot = self.db and self.db.cvarSnapshot
     if type(snapshot) == "table" and snapshot.valid and SetCVar then
         self.cvarGuard = true
-        SetCVar("nameplateShowFriends", snapshot.friends or "0")
-        SetCVar("nameplateShowEnemies", snapshot.enemies or "0")
+        local ok, reason = pcall(function()
+            SetCVar("nameplateShowFriends", snapshot.friends or "0")
+            SetCVar("nameplateShowEnemies", snapshot.enemies or "0")
+        end)
         self.cvarGuard = false
+        if not ok then
+            self:Print("could not restore previous nameplate settings: " .. tostring(reason))
+            return false
+        end
         self:Debug("restored CVar snapshot friends=" .. tostring(snapshot.friends)
             .. " enemies=" .. tostring(snapshot.enemies)
             .. " clear=" .. tostring(clearSnapshot and true or false))
@@ -634,11 +816,20 @@ function RaidCC:RestoreCVars(clearSnapshot)
     if clearSnapshot and self.db then
         self.db.cvarSnapshot = nil
     end
+    return true
 end
 
 function RaidCC:EnterActiveMode()
+    local compatible, code, message = self:GetCompatibilityStatus()
+    if not compatible then
+        self:WarnEnvironment(code, message)
+        return
+    end
     if self.runtimeActive then
-        self:ForceRequiredCVars()
+        if not self:ForceRequiredCVars() then
+            self:LeaveActiveMode()
+            return
+        end
         self:RebuildRaidGUIDCache()
         self:ReevaluateVisiblePlates()
         return
@@ -646,7 +837,11 @@ function RaidCC:EnterActiveMode()
     self:SaveCVarSnapshot()
     self.runtimeActive = true
     self:Debug("entering active raid mode")
-    self:ForceRequiredCVars()
+    if not self:ForceRequiredCVars() then
+        self.runtimeActive = false
+        self:RestoreCVars(true)
+        return
+    end
     self:RebuildRaidGUIDCache()
     self:ReevaluateVisiblePlates()
 end
@@ -662,15 +857,23 @@ function RaidCC:LeaveActiveMode()
 end
 
 function RaidCC:RefreshMode()
-    if self:ShouldModeBeActive() then
+    local requested = self:IsModeRequested()
+    local compatible, code, message = self:GetCompatibilityStatus()
+    if requested and compatible then
         self:EnterActiveMode()
-    elseif self.runtimeActive then
-        self:LeaveActiveMode()
-    elseif self.db and self.db.cvarSnapshot and self.db.cvarSnapshot.valid then
-        -- Recover a snapshot left by a reload/logout that came back disabled
-        -- or outside a raid.
-        self:RestoreCVars(true)
+    else
+        if self.runtimeActive then
+            self:LeaveActiveMode()
+        elseif self.db and self.db.cvarSnapshot and self.db.cvarSnapshot.valid then
+            -- Recover a snapshot left by a reload/logout that came back disabled,
+            -- outside a raid, or without a usable TurboPlates environment.
+            self:RestoreCVars(true)
+        end
+        if requested and not compatible then
+            self:WarnEnvironment(code, message)
+        end
     end
+    self:RefreshOptionsStatus()
 end
 
 function RaidCC:OnHeartbeat(elapsed)
@@ -682,6 +885,12 @@ function RaidCC:OnHeartbeat(elapsed)
         return
     end
     self.elapsed = 0
+
+    local compatible = self:GetCompatibilityStatus()
+    if not compatible then
+        self:RefreshMode()
+        return
+    end
 
     for nameplate in pairs(self.visiblePlates) do
         local state = nameplate._actuallyRaidCCState
@@ -716,16 +925,7 @@ function RaidCC:OnRosterChanged()
     self:Debug("roster changed shouldBeActive=" .. tostring(shouldBeActive)
         .. " runtime=" .. tostring(self.runtimeActive)
         .. " raidCount=" .. tostring(RaidCount()))
-    if not shouldBeActive then
-        self:RefreshMode()
-        return
-    end
-    if not self.runtimeActive then
-        self:EnterActiveMode()
-        return
-    end
-    self:RebuildRaidGUIDCache()
-    self:ReevaluateVisiblePlates()
+    self:RefreshMode()
 end
 
 function RaidCC:OnUnitChanged(unit, auraOnly)
@@ -743,15 +943,15 @@ end
 
 function RaidCC:BuildTrackedSpellNames()
     ClearTable(self.trackedSpellNames)
-    for spellID in pairs(trackedSpellIDs) do
+    for spellID, kind in pairs(trackedSpellIDs) do
         local name = GetSpellInfo and GetSpellInfo(spellID)
         if name then
-            self.trackedSpellNames[name] = true
+            self.trackedSpellNames[name] = kind
         end
     end
     -- Ascension may remap IDs, but stable English names still qualify.
-    self.trackedSpellNames.Cyclone = true
-    self.trackedSpellNames.Shadowfury = true
+    self.trackedSpellNames.Cyclone = CC_CYCLONE
+    self.trackedSpellNames.Shadowfury = CC_SHADOWFURY
 end
 
 function RaidCC:Initialize()
@@ -777,6 +977,16 @@ function RaidCC:Initialize()
 end
 
 local Events = {}
+
+function Events.ADDON_LOADED(addonName)
+    if addonName == "TurboPlates"
+        or addonName == "ElvUI"
+        or addonName == "Kui_Nameplates"
+        or addonName == "TidyPlates_ThreatPlates"
+        or addonName == "PlateBuffs" then
+        RaidCC:RefreshMode()
+    end
+end
 
 function Events.PLAYER_LOGIN()
     RaidCC:RefreshMode()
@@ -817,18 +1027,33 @@ function Events.UNIT_NAME_UPDATE(unit)
 end
 
 function Events.CVAR_UPDATE(cvarName)
-    if not RaidCC.runtimeActive or RaidCC.cvarGuard then
+    if RaidCC.cvarGuard then
+        return
+    end
+    if not RaidCC.runtimeActive then
+        if RaidCC:IsModeRequested() then
+            RaidCC:RefreshMode()
+        end
+        return
+    end
+    local compatible = RaidCC:GetCompatibilityStatus()
+    if not compatible then
+        RaidCC:RefreshMode()
         return
     end
     -- Wrath and Ascension builds report different CVAR_UPDATE names. Checking
     -- the two required values on any CVar event avoids depending on that label.
-    RaidCC:ForceRequiredCVars()
+    if not RaidCC:ForceRequiredCVars() then
+        RaidCC:LeaveActiveMode()
+    end
 end
 
 function Events.PLAYER_LOGOUT()
     if RaidCC.runtimeActive then
         -- Keep the valid snapshot so a reload cannot mistake the temporary
         -- both-on state for the player's original preference.
+        -- Clear runtime first so a delayed CVAR_UPDATE cannot force both on again.
+        RaidCC.runtimeActive = false
         RaidCC:RestoreCVars(false)
     end
 end

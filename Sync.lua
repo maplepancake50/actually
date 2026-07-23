@@ -19,7 +19,14 @@ local MAX_TRANSFER_CHUNKS = 2000
 local MAX_LIVE_PAYLOAD = 240
 local MAX_QUEUED_MESSAGES = 5000
 local RESERVED_ALERT_MESSAGES = 250
--- Development fallback for cross-guild testing. Production discovery is GUILD.
+
+-- CROSS-GUILD TESTING SWITCH
+-- Keep this true while testing characters that are not in the same guild.
+-- Before releasing the guild-only version, change it to false. That one change
+-- disables bootstrap discovery, direct-peer edit notices, targeted /sync pull,
+-- and all other outbound sync while the player is not in a guild. Normal guild
+-- broadcasts and the whispered snapshot transfers they initiate still work.
+local ENABLE_CROSS_GUILD_TEST_SYNC = true
 local BOOTSTRAP_PEERS = { "Bolty" }
 
 -- GetTime drives session timers; time is reserved for persistent identifiers.
@@ -918,6 +925,14 @@ function Sync:RememberPeer(identity)
     end
 end
 
+function Sync:RememberDirectPeer(identity)
+    local key = PeerKey(identity)
+    if key ~= "" and key ~= self.selfKey then
+        Addon.db.sync.directPeers[key] = ShortName(identity)
+        self:RememberPeer(identity)
+    end
+end
+
 local function NewMessageQueue()
     return { items = {}, head = 1, tail = 0 }
 end
@@ -1055,6 +1070,9 @@ function Sync:BroadcastLive(message)
         self:QueueMessage(message, "GUILD")
         return
     end
+    if not ENABLE_CROSS_GUILD_TEST_SYNC then
+        return
+    end
     local now = Now()
     for _, peer in pairs(self.peers) do
         if IsActivePeer(peer, now) then
@@ -1128,6 +1146,9 @@ function Sync:SendHeartbeat()
         self:SendHello("GUILD")
         return
     end
+    if not ENABLE_CROSS_GUILD_TEST_SYNC then
+        return
+    end
     local leader = self:GetLeader()
     local now = Now()
     if leader == self.selfKey then
@@ -1145,6 +1166,9 @@ function Sync:SendHeartbeat()
 end
 
 function Sync:DiscoverKnownPeers()
+    if not ENABLE_CROSS_GUILD_TEST_SYNC then
+        return
+    end
     local candidates = {}
     local included = {}
     for _, name in ipairs(BOOTSTRAP_PEERS) do
@@ -1178,6 +1202,60 @@ function Sync:DiscoverKnownPeers()
     end
     if sent > 0 then
         self:Log("Peer discovery whispered " .. tostring(sent) .. " known/bootstrap users.")
+    end
+end
+
+-- Outside a guild there is no broadcast channel, so an edit notifies known
+-- users directly. Explicit direct peers are also notified while in a guild,
+-- which keeps cross-guild development/testing functional.
+function Sync:NotifyPeersOfUpdate(digest, directOnly)
+    local candidates = {}
+    local included = {}
+    local now = Now()
+
+    for key, peer in pairs(self.peers or {}) do
+        if key ~= self.selfKey and IsActivePeer(peer, now)
+            and (not directOnly or Addon.db.sync.directPeers[key]) then
+            table.insert(candidates, peer.name)
+            included[key] = true
+        end
+    end
+
+    local remembered = {}
+    local savedPeers = directOnly and Addon.db.sync.directPeers or Addon.db.sync.knownPeers
+    for _, name in pairs(savedPeers or {}) do
+        local key = PeerKey(name)
+        if key ~= self.selfKey and not included[key] then
+            table.insert(remembered, name)
+            included[key] = true
+        end
+    end
+    if not directOnly then
+        for _, name in ipairs(BOOTSTRAP_PEERS) do
+            local key = PeerKey(name)
+            if key ~= self.selfKey and not included[key] then
+                table.insert(remembered, name)
+                included[key] = true
+            end
+        end
+    end
+    table.sort(remembered, function(left, right)
+        return PeerKey(left) < PeerKey(right)
+    end)
+    for _, name in ipairs(remembered) do
+        table.insert(candidates, name)
+    end
+
+    local sent = 0
+    for _, name in ipairs(candidates) do
+        if sent >= 8 then
+            break
+        end
+        self:QueueMessage("SYNC|U|" .. digest, "WHISPER", name)
+        sent = sent + 1
+    end
+    if sent > 0 then
+        self:Log("Update notice whispered to " .. tostring(sent) .. " known user(s).")
     end
 end
 
@@ -1246,18 +1324,18 @@ function Sync:MarkDirty(announce)
     if not self.initialized or announce == false then
         return
     end
-    if self:GetLeader() == self.selfKey then
-        self:SendHeartbeat()
-    else
-        local _, digest = self:GetSnapshot()
-        if GuildChannelAvailable() then
-            self:QueueMessage("SYNC|U|" .. digest, "GUILD")
+    local _, digest = self:GetSnapshot()
+    if GuildChannelAvailable() then
+        if self:GetLeader() == self.selfKey then
+            self:SendHeartbeat()
         else
-            local leader = self.peers[self:GetLeader()]
-            if leader then
-                self:QueueMessage("SYNC|U|" .. digest, "WHISPER", leader.name)
-            end
+            self:QueueMessage("SYNC|U|" .. digest, "GUILD")
         end
+        if ENABLE_CROSS_GUILD_TEST_SYNC then
+            self:NotifyPeersOfUpdate(digest, true)
+        end
+    elseif ENABLE_CROSS_GUILD_TEST_SYNC then
+        self:NotifyPeersOfUpdate(digest, false)
     end
 end
 
@@ -1298,8 +1376,16 @@ function Sync:PrintStatus(force)
 end
 
 function Sync:ForceSync(target)
+    if not ENABLE_CROSS_GUILD_TEST_SYNC and not GuildChannelAvailable() then
+        Addon:Print("Synchronization is unavailable while you are outside the guild.")
+        return
+    end
     if target and target ~= "" then
-        self:RememberPeer(target)
+        if not ENABLE_CROSS_GUILD_TEST_SYNC then
+            Addon:Print("Targeted sync pull is disabled in guild-only mode.")
+            return
+        end
+        self:RememberDirectPeer(target)
         self:RequestSnapshot(target, true)
         self:SendHeartbeat()
         Addon:Print("Forced snapshot request sent to " .. ShortName(target) .. ".")
@@ -1328,8 +1414,15 @@ end
 
 function Sync:HandleHello(sender, channel, digest, authorityRevision)
     local key = PeerKey(sender)
-    local wasKnown = self.peers[key] ~= nil
-    self.peers[key] = { name = sender, lastSeen = Now(), digest = digest }
+    local peer = self.peers[key] or {}
+    local wasKnown = next(peer) ~= nil
+    peer.name = sender
+    peer.lastSeen = Now()
+    peer.digest = digest
+    if channel == "GUILD" then
+        peer.guildSeenAt = Now()
+    end
+    self.peers[key] = peer
     self:Log("Heartbeat from " .. ShortName(sender) .. " via " .. tostring(channel) .. "; digest " .. tostring(digest) .. ".")
     if channel == "GUILD" and not wasKnown then
         self:SendHello("WHISPER", sender)
@@ -1442,10 +1535,22 @@ function Sync:HandleMessage(message, channel, sender)
     end
 
     local senderKey = PeerKey(sender)
+    local existingPeer = self.peers[senderKey]
+    if not ENABLE_CROSS_GUILD_TEST_SYNC and channel == "WHISPER" then
+        local guildSeenAt = existingPeer and tonumber(existingPeer.guildSeenAt) or 0
+        if Now() - guildSeenAt > PEER_TIMEOUT then
+            self:Log("Ignored a non-guild sync whisper from " .. ShortName(sender) .. ".")
+            return
+        end
+    end
+
     self:RememberPeer(sender)
-    local peer = self.peers[senderKey] or {}
+    local peer = existingPeer or {}
     peer.name = sender
     peer.lastSeen = Now()
+    if channel == "GUILD" then
+        peer.guildSeenAt = Now()
+    end
     self.peers[senderKey] = peer
 
     if kind == "H" then
@@ -1467,16 +1572,32 @@ function Sync:HandleMessage(message, channel, sender)
         end
     elseif kind == "U" then
         local key = PeerKey(sender)
-        self.peers[key] = { name = sender, lastSeen = Now(), digest = rest }
+        local updatePeer = self.peers[key] or {}
+        updatePeer.name = sender
+        updatePeer.lastSeen = Now()
+        updatePeer.digest = rest
+        if channel == "GUILD" then
+            updatePeer.guildSeenAt = Now()
+        end
+        self.peers[key] = updatePeer
         self:Log("Update notice from " .. ShortName(sender) .. ".")
         local _, ownDigest = self:GetSnapshot()
-        if self:GetLeader() == self.selfKey and rest ~= ownDigest then
-            self:RequestSnapshot(sender)
+        -- Guild traffic is coordinated through the elected leader. Whisper
+        -- notices are explicit cross-guild test updates, so the recipient
+        -- pulls directly from the editor instead of relying on leader state.
+        if rest ~= ownDigest and (
+            (ENABLE_CROSS_GUILD_TEST_SYNC and channel == "WHISPER")
+            or self:GetLeader() == self.selfKey
+        ) then
+            -- An update notice represents a new state, so it must not be
+            -- suppressed by the cooldown from a recent login/manual pull.
+            self:RequestSnapshot(sender, true)
         end
     elseif kind == "L" then
         self.peers[PeerKey(sender)] = nil
         self:Log(ShortName(sender) .. " logged off.")
     elseif kind == "Q" and channel == "WHISPER" then
+        self:RememberDirectPeer(sender)
         self:Log("Snapshot requested by " .. ShortName(sender) .. ".")
         self:SendSnapshot(sender)
         self:SendHello("WHISPER", sender)
@@ -1632,6 +1753,11 @@ function Sync:Initialize()
         canonicalPeers[PeerKey(peerName)] = ShortName(peerName)
     end
     Addon.db.sync.knownPeers = canonicalPeers
+    local canonicalDirectPeers = {}
+    for _, peerName in pairs(Addon.db.sync.directPeers or {}) do
+        canonicalDirectPeers[PeerKey(peerName)] = ShortName(peerName)
+    end
+    Addon.db.sync.directPeers = canonicalDirectPeers
     self:RememberPeer(UnitName("player"))
     self.logs = {}
     self.debugEnabled = false
@@ -1647,7 +1773,7 @@ function Sync:Initialize()
         if event == "PLAYER_LOGOUT" then
             if GuildChannelAvailable() then
                 pcall(SendAddonMessage, PREFIX, "SYNC|L|", "GUILD")
-            else
+            elseif ENABLE_CROSS_GUILD_TEST_SYNC then
                 local now = Now()
                 for _, peer in pairs(Sync.peers or {}) do
                     if IsActivePeer(peer, now) then

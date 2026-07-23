@@ -257,8 +257,9 @@ function CacheTips:Create()
     raidCCCheckbox:SetPoint("TOPLEFT", utility, "TOPLEFT", 300, -75)
     local raidCCLabel = raidCCCheckbox:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     raidCCLabel:SetPoint("LEFT", raidCCCheckbox, "RIGHT", 4, 1)
-    raidCCLabel:SetText("Enable Raid CC Mode")
+    raidCCLabel:SetText("Better Healer Nameplates")
     self.raidCCCheckbox = raidCCCheckbox
+    self.raidCCLabel = raidCCLabel
 
     raidCCCheckbox:SetScript("OnClick", function(owner)
         if Addon.RaidCC then
@@ -268,8 +269,22 @@ function CacheTips:Create()
     end)
     raidCCCheckbox:SetScript("OnEnter", function(owner)
         GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
-        GameTooltip:SetText("Enable Raid CC Mode", 1, 1, 1)
-        GameTooltip:AddLine("While in a raid, enables friendly and enemy player nameplates, displays raid members as names only, and marks Cyclone or Shadowfury.", nil, nil, nil, true)
+        GameTooltip:SetText("Better Healer Nameplates", 1, 1, 1)
+        GameTooltip:AddLine("While in a raid or battleground, displays raid members as names only. Cyclone shows a green arrow; Shadowfury shows a purple arrow.", nil, nil, nil, true)
+        if Addon.RaidCC and Addon.RaidCC.GetRuntimeStatus then
+            local state, status = Addon.RaidCC:GetRuntimeStatus()
+            local r, g, b = 1, 0.82, 0
+            if state == "active" then
+                r, g, b = 0.25, 1, 0.35
+            elseif state == "blocked" then
+                r, g, b = 1, 0.25, 0.20
+            elseif state == "disabled" then
+                r, g, b = 0.72, 0.72, 0.72
+            end
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine(status, r, g, b, true)
+        end
+        GameTooltip:AddLine("Previous friendly/enemy visibility settings are restored when the mode stops.", 0.72, 0.78, 0.86, true)
         GameTooltip:Show()
     end)
     raidCCCheckbox:SetScript("OnLeave", function()
@@ -435,6 +450,18 @@ end
 function CacheTips:RefreshRaidCCToggle()
     if not self.raidCCCheckbox then return end
     self.raidCCCheckbox:SetChecked(Addon.RaidCC and Addon.RaidCC:IsEnabled() or false)
+    if not self.raidCCLabel then return end
+    local state = Addon.RaidCC and Addon.RaidCC.GetRuntimeStatus
+        and Addon.RaidCC:GetRuntimeStatus() or "disabled"
+    if state == "active" then
+        self.raidCCLabel:SetTextColor(0.25, 1, 0.35)
+    elseif state == "blocked" then
+        self.raidCCLabel:SetTextColor(1, 0.25, 0.20)
+    elseif state == "waiting" then
+        self.raidCCLabel:SetTextColor(1, 0.82, 0)
+    else
+        self.raidCCLabel:SetTextColor(1, 1, 1)
+    end
 end
 
 function CacheTips:RefreshArrowToggle()
