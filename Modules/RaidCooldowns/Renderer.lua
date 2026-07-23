@@ -133,6 +133,33 @@ local MAX_SCALE = 1.80
 local DEFAULT_POINT = "CENTER"
 local DEFAULT_X = 0
 local DEFAULT_Y = 140
+local DEFAULT_SOUND = "raid_warning"
+
+local SOUND_OPTIONS = {
+    { key = "raid_warning", label = "Raid Warning",
+        path = "Sound\\Interface\\RaidWarning.wav" },
+    { key = "ready_check", label = "Ready Check",
+        path = "Sound\\Interface\\ReadyCheck.wav" },
+    { key = "pvp_flag", label = "PvP Flag Alert",
+        path = "Sound\\Spells\\PVPFlagTaken.wav" },
+    { key = "alarm_1", label = "Alarm Clock 1",
+        path = "Sound\\Interface\\AlarmClockWarning1.wav" },
+    { key = "alarm_2", label = "Alarm Clock 2",
+        path = "Sound\\Interface\\AlarmClockWarning2.wav" },
+    { key = "alarm_3", label = "Alarm Clock 3",
+        path = "Sound\\Interface\\AlarmClockWarning3.wav" },
+    { key = "alliance_bell", label = "Alliance Bell",
+        path = "Sound\\Doodad\\BellTollAlliance.wav" },
+    { key = "horde_bell", label = "Horde Bell",
+        path = "Sound\\Doodad\\BellTollHorde.wav" },
+    { key = "night_elf_bell", label = "Night Elf Bell",
+        path = "Sound\\Doodad\\BellTollNightElf.wav" },
+    { key = "boat_horn", label = "Boat Horn",
+        path = "Sound\\Doodad\\BoatDockedWarning.wav" },
+}
+
+local SOUND_BY_KEY = {}
+for _, option in ipairs(SOUND_OPTIONS) do SOUND_BY_KEY[option.key] = option end
 
 local function clamp(value, minimum, maximum)
     value = tonumber(value) or minimum
@@ -170,7 +197,76 @@ function AlertUI:GetProfile()
     profile.x = tonumber(profile.x) or DEFAULT_X
     profile.y = tonumber(profile.y) or DEFAULT_Y
     profile.scale = roundScale(profile.scale or 1)
+    if profile.soundEnabled == nil then
+        profile.soundEnabled = not (root.requests and root.requests.sound == false)
+    end
+    if not SOUND_BY_KEY[profile.sound] then profile.sound = DEFAULT_SOUND end
+    if profile.bounce == nil then profile.bounce = false end
+    if profile.glow == nil then profile.glow = true end
+    if profile.pulse == nil then profile.pulse = true end
     return profile
+end
+
+function AlertUI:GetSoundOptions()
+    return SOUND_OPTIONS
+end
+
+function AlertUI:GetSound()
+    local profile = self:GetProfile()
+    return profile and profile.sound or DEFAULT_SOUND
+end
+
+function AlertUI:GetSoundLabel()
+    local option = SOUND_BY_KEY[self:GetSound()] or SOUND_BY_KEY[DEFAULT_SOUND]
+    return option.label
+end
+
+function AlertUI:IsSoundEnabled()
+    local profile = self:GetProfile()
+    return profile and profile.soundEnabled ~= false or false
+end
+
+function AlertUI:SetSoundEnabled(enabled)
+    local profile = self:GetProfile()
+    if not profile then return end
+    profile.soundEnabled = enabled == true
+    local tips = cacheTips()
+    if tips and tips.RefreshARCAlertControls then tips:RefreshARCAlertControls() end
+end
+
+function AlertUI:SetSound(key, preview)
+    local profile = self:GetProfile()
+    if not profile or not SOUND_BY_KEY[key] then return false end
+    profile.sound = key
+    local tips = cacheTips()
+    if tips and tips.RefreshARCAlertControls then tips:RefreshARCAlertControls() end
+    if preview then self:PlaySound(true) end
+    return true
+end
+
+function AlertUI:PlaySound(force)
+    local profile = self:GetProfile()
+    if not profile or (not force and profile.soundEnabled == false) then return false end
+    local option = SOUND_BY_KEY[profile.sound] or SOUND_BY_KEY[DEFAULT_SOUND]
+    if not option or not PlaySoundFile then return false end
+    PlaySoundFile(option.path)
+    return true
+end
+
+function AlertUI:GetEffect(effect)
+    local profile = self:GetProfile()
+    return profile and profile[effect] == true or false
+end
+
+function AlertUI:SetEffect(effect, enabled)
+    if effect ~= "bounce" and effect ~= "glow" and effect ~= "pulse" then return false end
+    local profile = self:GetProfile()
+    if not profile then return false end
+    profile[effect] = enabled == true
+    self:RefreshVisualOptions()
+    local tips = cacheTips()
+    if tips and tips.RefreshARCAlertControls then tips:RefreshARCAlertControls() end
+    return true
 end
 
 function AlertUI:GetScale()
@@ -239,6 +335,11 @@ function AlertUI:Reset()
     profile.x = DEFAULT_X
     profile.y = DEFAULT_Y
     profile.scale = 1
+    profile.soundEnabled = true
+    profile.sound = DEFAULT_SOUND
+    profile.bounce = false
+    profile.glow = true
+    profile.pulse = true
     self:Arrange()
     if self.preview and self.preview:IsShown() then
         self:ApplyBasePosition(self.preview, 1)
@@ -246,6 +347,38 @@ function AlertUI:Reset()
     end
     local tips = cacheTips()
     if tips and tips.RefreshARCAlertControls then tips:RefreshARCAlertControls() end
+end
+
+function AlertUI:UpdateVisual(frame, now)
+    if not frame then return end
+    local profile = self:GetProfile()
+    if not profile then return end
+    now = tonumber(now) or 0
+
+    local pulse = profile.pulse and (1 + 0.07 * math.sin(now * 8)) or 1
+    self:ApplyScale(frame, pulse)
+
+    local iconY = -5
+    if profile.bounce then iconY = iconY + math.abs(math.sin(now * 5)) * 14 end
+    frame.icon:ClearAllPoints()
+    frame.icon:SetPoint("CENTER", frame, "CENTER", 0, iconY)
+
+    if profile.glow then
+        frame.glow:Show()
+        local glowWave = 0.5 + 0.5 * math.sin(now * 6)
+        local glowSize = 172 + glowWave * 12
+        frame.glow:SetWidth(glowSize)
+        frame.glow:SetHeight(glowSize)
+        frame.glow:SetAlpha(0.70 + glowWave * 0.30)
+    else
+        frame.glow:Hide()
+    end
+end
+
+function AlertUI:RefreshVisualOptions()
+    local now = GetTime and GetTime() or 0
+    for _, frame in ipairs(self.frames or {}) do self:UpdateVisual(frame, now) end
+    if self.preview then self:UpdateVisual(self.preview, now) end
 end
 
 local function createVisualFrame(name)
@@ -256,13 +389,13 @@ local function createVisualFrame(name)
     frame:SetFrameLevel(100)
     frame:SetClampedToScreen(true)
 
-    local glow = frame:CreateTexture(nil, "BACKGROUND")
-    glow:SetTexture("Interface\\Cooldown\\star4")
+    local glow = frame:CreateTexture(nil, "OVERLAY")
+    glow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
     glow:SetPoint("CENTER", frame, "CENTER", 0, -5)
-    glow:SetWidth(190)
-    glow:SetHeight(190)
+    glow:SetWidth(178)
+    glow:SetHeight(178)
     glow:SetBlendMode("ADD")
-    glow:SetVertexColor(1, 0.82, 0.12, 0.80)
+    glow:SetVertexColor(1.00, 0.72, 0.08, 1.00)
     frame.glow = glow
 
     local icon = frame:CreateTexture(nil, "ARTWORK")
@@ -272,6 +405,8 @@ local function createVisualFrame(name)
     icon:SetHeight(128)
     icon:SetTexCoord(0.09, 0.91, 0.09, 0.91)
     frame.icon = icon
+    glow:ClearAllPoints()
+    glow:SetPoint("CENTER", icon, "CENTER", 0, 0)
 
     local heading = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge")
     heading:SetPoint("BOTTOM", icon, "TOP", 0, 18)
@@ -314,14 +449,6 @@ end
 
 function AlertUI:CreateAlertFrame(name)
     local frame = createVisualFrame(name)
-    frame:EnableMouse(true)
-
-    local decline = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    decline:SetWidth(92)
-    decline:SetHeight(21)
-    decline:SetPoint("TOP", frame.timer, "BOTTOM", 0, -4)
-    decline:SetText("Can't use")
-    frame.decline = decline
 
     frame:SetScript("OnShow", function()
         frame:SetAlpha(1)
@@ -335,7 +462,7 @@ function AlertUI:CreateAlertFrame(name)
     frame:SetScript("OnUpdate", function(alertFrame)
         if not alertFrame:IsShown() then return end
         local now = GetTime and GetTime() or 0
-        AlertUI:ApplyScale(alertFrame, 1 + 0.07 * math.sin(now * 8))
+        AlertUI:UpdateVisual(alertFrame, now)
         local remaining = alertFrame.arcDeadline and (alertFrame.arcDeadline - now) or nil
         alertFrame:SetAlpha(remaining and remaining < 0.75 and math.max(0, remaining / 0.75) or 1)
     end)
@@ -362,6 +489,9 @@ function AlertUI:CreatePreview()
     frame:SetScript("OnDragStop", function(owner)
         owner:StopMovingOrSizing()
         AlertUI:SavePosition(owner)
+    end)
+    frame:SetScript("OnUpdate", function(owner)
+        if owner:IsShown() then AlertUI:UpdateVisual(owner, GetTime and GetTime() or 0) end
     end)
     self.preview = frame
     self:ApplyBasePosition(frame, 1)
@@ -399,5 +529,6 @@ function AlertUI:Initialize()
     self.frames = {}
     self:GetProfile()
     self:CreatePreview()
+    self:RefreshVisualOptions()
     self.initialized = true
 end

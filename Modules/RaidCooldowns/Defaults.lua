@@ -40,6 +40,11 @@ ARC.Defaults = {
             x = 0,
             y = 140,
             scale = 1,
+            soundEnabled = true,
+            sound = "raid_warning",
+            bounce = false,
+            glow = true,
+            pulse = true,
         },
         requestUI = {
             point = "CENTER",

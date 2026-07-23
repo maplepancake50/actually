@@ -470,6 +470,8 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
         elseif lowerMessage == "pet sad" then
             Addon.Pet:Show()
             Addon.Pet:Play("sad")
+        elseif lowerMessage == "arnold emote test" then
+            Addon.Pet:ShowEmoteTest()
         elseif lowerMessage == "fap" and Addon.FapAlert then
             Addon.FapAlert:Trigger()
         elseif lowerMessage == "sync" and Addon.Sync then

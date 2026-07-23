@@ -14,6 +14,7 @@ local ACTIVITY_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetActivi
 local TYPING_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetTyping"
 local THOUGHT_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetThoughts"
 local CROW_LAUNCH_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetCrowLaunch"
+local DEATH_GRIP_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetDeathGrip"
 local LEVITATE_CLOUD_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetLevitateCloud"
 local MERCENARY_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetMercenary"
 local SPEECH_BUBBLE_TEXTURE = "Interface\\AddOns\\actually\\Textures\\ActuallyPetSpeechBubble"
@@ -21,6 +22,7 @@ local ACTION_BOX_TEXTURE = "Interface\\AddOns\\actually\\Textures\\ActuallyPetAc
 local RAPID_CLICK_COUNT = 5
 local RAPID_CLICK_WINDOW = 1.75
 local CROW_RETURN_DELAY = 6
+local DEATH_GRIP_RETURN_DELAY = 6
 local CROW_EFFECT_TIME_SCALE = 1.3
 local CLICK_CHATTER_COOLDOWN = 2
 local IDLE_SLEEP_DELAY = 60
@@ -76,6 +78,10 @@ local ANIMATIONS = {
     deadpan = {
         frames = { 1, 15, 16, 15, 1 },
         durations = { 0.14, 0.24, 0.34, 0.24, 0.12 },
+    },
+    confusedLanding = {
+        frames = { 13, 4, 13, 4, 1 },
+        durations = { 0.24, 0.30, 0.34, 0.28, 0.14 },
     },
     browReaction = {
         frames = { 1, 4, 1, 13, 14, 1 },
@@ -172,6 +178,74 @@ local ANIMATIONS = {
     },
 }
 
+local EMOTE_TEST_ORDER = {
+    "blink",
+    "doubleBlink",
+    "sneeze",
+    "happy",
+    "sleepy",
+    "snoring",
+    "curious",
+    "perky",
+    "sideEye",
+    "deadpan",
+    "confusedLanding",
+    "browReaction",
+    "brightReaction",
+    "dozyBlink",
+    "startledRecover",
+    "sad",
+    "talkNeutral",
+    "talkBlink",
+    "talkGlance",
+    "talkBrows",
+    "talkDry",
+    "talkEmphatic",
+    "typingGaze",
+    "readBook",
+    "magnify",
+    "crowLanding",
+    "inspectSword",
+    "inspectBow",
+    "healing",
+    "research",
+    "mercenaryCast",
+}
+
+local EMOTE_TEST_LABELS = {
+    blink = "Blink",
+    doubleBlink = "Double Blink",
+    sneeze = "Sneeze",
+    happy = "Happy",
+    sleepy = "Sleepy Reaction",
+    snoring = "Sleep / Snore (Loop)",
+    curious = "Curious",
+    perky = "Perky",
+    sideEye = "Side Eye",
+    deadpan = "Deadpan",
+    confusedLanding = "Confused After Impact",
+    browReaction = "Eyebrow Reaction",
+    brightReaction = "Bright Reaction",
+    dozyBlink = "Dozy Blink",
+    startledRecover = "Startled Recovery",
+    sad = "Sad",
+    talkNeutral = "Talking: Neutral",
+    talkBlink = "Talking: Blink",
+    talkGlance = "Talking: Glance",
+    talkBrows = "Talking: Eyebrows",
+    talkDry = "Talking: Dry",
+    talkEmphatic = "Talking: Emphatic",
+    typingGaze = "Typing Gaze (Loop)",
+    readBook = "Read a Book",
+    magnify = "Magnifying Glass",
+    crowLanding = "Crow Lands on Head",
+    inspectSword = "Inspect Sword",
+    inspectBow = "Inspect Bow",
+    healing = "Channel Healing Spell",
+    research = "Build Analysis (Loop)",
+    mercenaryCast = "Mercenary Cast (Loop)",
+}
+
 local CHATTER = {
     "well, actually...",
     "technically...",
@@ -225,6 +299,8 @@ local CHATTER = {
     "No, I never used that buff at cache",
     "Everyone in my guild is s++ tier",
     "core v core we can't lose",
+    "We do no damage in smoke bombs",
+    "I heard korkron have 500 people",
 }
 
 local DRAG_CHATTER = {
@@ -377,6 +453,7 @@ function Pet:StartMercenaryCast()
 
     self.isMercenaryCasting = true
     self:CancelCrowLaunch()
+    self:CancelDeathGrip()
     self:WakeFromIdle()
     self:HideBubble()
     self:HideThought(true)
@@ -499,6 +576,20 @@ function Pet:SetCrowLaunchFrame(frameNumber)
     self.crowLaunchTexture:SetTexCoord(column / 2, (column + 1) / 2, row / 2, (row + 1) / 2)
 end
 
+function Pet:SetDeathGripFrame(frameNumber, flipped)
+    if not self.deathGripTexture then
+        return
+    end
+
+    local top = (frameNumber - 1) / 4
+    local bottom = frameNumber / 4
+    if flipped then
+        self.deathGripTexture:SetTexCoord(1, 0, top, bottom)
+    else
+        self.deathGripTexture:SetTexCoord(0, 1, top, bottom)
+    end
+end
+
 function Pet:SetLevitateCloudFrame(frameNumber)
     if not self.levitateCloudTexture then
         return
@@ -518,6 +609,20 @@ end
 function Pet:SetCrowScreenPosition(x, y)
     self.crowLaunchFrame:ClearAllPoints()
     self.crowLaunchFrame:SetPoint("CENTER", UIParent, "BOTTOMLEFT", x, y)
+end
+
+function Pet:SetDeathGripTether(edgeX, petX, petY, direction)
+    if not self.deathGripFrame then
+        return
+    end
+
+    local width = math.max(96, math.abs(petX - edgeX))
+    self.deathGripFrame:SetWidth(width)
+    self.deathGripFrame:SetHeight(112)
+    self.deathGripFrame:ClearAllPoints()
+    self.deathGripFrame:SetPoint("CENTER", UIParent, "BOTTOMLEFT",
+        (edgeX + petX) / 2, petY)
+    self:SetDeathGripFrame(self.deathGripVisualFrame or 1, direction > 0)
 end
 
 function Pet:SetLevitateCloudPosition(x, y)
@@ -543,8 +648,26 @@ function Pet:CancelCrowLaunch()
     self:ApplyPosition()
 end
 
+function Pet:CancelDeathGrip()
+    if not self.deathGrip then
+        return
+    end
+
+    self.deathGrip = nil
+    if self.deathGripFrame then
+        self.deathGripFrame:Hide()
+    end
+    if self.levitateCloudFrame then
+        self.levitateCloudFrame:Hide()
+    end
+    self.frame:SetAlpha(1)
+    self.frame:SetClampedToScreen(true)
+    self.frame:EnableMouse(true)
+    self:ApplyPosition()
+end
+
 function Pet:TriggerCrowLaunch()
-    if self.crowLaunch or not self.crowLaunchFrame then
+    if self.crowLaunch or self.deathGrip or not self.crowLaunchFrame then
         return false
     end
     if Addon.Analyzer and Addon.Analyzer.running then
@@ -581,8 +704,49 @@ function Pet:TriggerCrowLaunch()
     return true
 end
 
+function Pet:TriggerDeathGrip()
+    if self.crowLaunch or self.deathGrip or not self.deathGripFrame then
+        return false
+    end
+    if Addon.Analyzer and Addon.Analyzer.running then
+        return false
+    end
+
+    local startX, startY = self.frame:GetCenter()
+    if not startX or not startY then
+        return false
+    end
+
+    local screenWidth = UIParent:GetWidth()
+    local direction = startX <= screenWidth / 2 and -1 or 1
+    local edgeX = direction < 0 and -PET_SIZE * 0.65
+        or screenWidth + PET_SIZE * 0.65
+    self.deathGrip = {
+        stage = "form",
+        elapsed = 0,
+        startX = startX,
+        startY = startY,
+        edgeX = edgeX,
+        direction = direction,
+    }
+    self.rapidClickCount = 0
+    self.rapidClickStarted = nil
+    self:HideBubble()
+    self:HideThought(true)
+    self:FinishAnimation()
+    self.frame:SetClampedToScreen(false)
+    self.frame:EnableMouse(false)
+    self.levitateCloudFrame:Hide()
+    self.deathGripVisualFrame = 1
+    self.deathGripFrame:SetAlpha(1)
+    self:SetDeathGripTether(edgeX, startX, startY, direction)
+    self.deathGripFrame:Show()
+    GameTooltip:Hide()
+    return true
+end
+
 function Pet:RegisterRapidClick()
-    if self.crowLaunch then
+    if self.crowLaunch or self.deathGrip then
         return true
     end
 
@@ -597,7 +761,10 @@ function Pet:RegisterRapidClick()
     if self.rapidClickCount >= RAPID_CLICK_COUNT then
         self.rapidClickCount = 0
         self.rapidClickStarted = nil
-        return self:TriggerCrowLaunch()
+        if math.random() < 0.5 then
+            return self:TriggerCrowLaunch()
+        end
+        return self:TriggerDeathGrip()
     end
     return false
 end
@@ -686,7 +853,95 @@ function Pet:UpdateCrowLaunch(elapsed)
             self.frame:EnableMouse(true)
             self:ApplyPosition()
             self:ResetTimers()
-            self:Play("curious")
+            self:Play("confusedLanding")
+        end
+    end
+
+    return true
+end
+
+function Pet:UpdateDeathGrip(elapsed)
+    local grip = self.deathGrip
+    if not grip then
+        return false
+    end
+
+    grip.elapsed = grip.elapsed + elapsed
+    if grip.stage == "form" then
+        local duration = 0.52
+        local progress = math.min(grip.elapsed / duration, 1)
+        self.deathGripVisualFrame = progress < 0.42 and 1 or 2
+        self:SetDeathGripTether(grip.edgeX, grip.startX, grip.startY, grip.direction)
+        self.deathGripFrame:SetAlpha(math.min(1, progress * 2.8))
+        if progress >= 1 then
+            grip.stage = "pull"
+            grip.elapsed = 0
+            self.deathGripVisualFrame = 3
+        end
+    elseif grip.stage == "pull" then
+        local duration = 0.78
+        local progress = math.min(grip.elapsed / duration, 1)
+        local eased = progress * progress * progress
+        local targetX = grip.edgeX + grip.direction * PET_SIZE * 0.15
+        local petX = grip.startX + (targetX - grip.startX) * eased
+        local recoil = math.sin(progress * math.pi * 3) * 7 * (1 - progress)
+        local petY = grip.startY + recoil
+        self:SetScreenPosition(petX, petY)
+        self:SetDeathGripTether(grip.edgeX, petX, petY, grip.direction)
+        if progress >= 1 then
+            grip.stage = "wait"
+            grip.elapsed = 0
+            self.deathGripVisualFrame = 4
+            self:SetDeathGripTether(grip.edgeX, targetX, grip.startY, grip.direction)
+        end
+    elseif grip.stage == "wait" then
+        local fadeDuration = 0.55
+        if grip.elapsed < fadeDuration then
+            self.deathGripVisualFrame = 4
+            self:SetDeathGripTether(grip.edgeX,
+                grip.edgeX + grip.direction * PET_SIZE * 0.15,
+                grip.startY, grip.direction)
+            self.deathGripFrame:SetAlpha(1 - grip.elapsed / fadeDuration)
+        else
+            self.deathGripFrame:Hide()
+        end
+
+        if grip.elapsed >= DEATH_GRIP_RETURN_DELAY then
+            grip.stage = "return"
+            grip.elapsed = 0
+            -- Re-enter from the same side Arnold was pulled through. The
+            -- upward arc reads as a small hop instead of another flying return.
+            grip.returnX = grip.edgeX + grip.direction * PET_SIZE * 0.15
+            grip.returnY = grip.startY
+            self:SetScreenPosition(grip.returnX, grip.returnY)
+            self.levitateCloudFrame:Hide()
+        end
+    elseif grip.stage == "return" then
+        local duration = 0.92
+        local progress = math.min(grip.elapsed / duration, 1)
+        local eased = 1 - (1 - progress) * (1 - progress) * (1 - progress)
+        local petX = grip.returnX + (grip.startX - grip.returnX) * eased
+        local petY = grip.startY + math.sin(progress * math.pi) * 74
+        self:SetScreenPosition(petX, petY)
+        if progress >= 1 then
+            grip.stage = "landing"
+            grip.elapsed = 0
+            self:SetScreenPosition(grip.startX, grip.startY)
+        end
+    elseif grip.stage == "landing" then
+        local duration = 0.34
+        local progress = math.min(grip.elapsed / duration, 1)
+        local bounce = math.sin(progress * math.pi) * 9 * (1 - progress)
+        self:SetScreenPosition(grip.startX, grip.startY + bounce)
+        if progress >= 1 then
+            self.deathGripFrame:Hide()
+            self.deathGrip = nil
+            self.frame:SetAlpha(1)
+            self.frame:SetClampedToScreen(true)
+            self.frame:EnableMouse(true)
+            self:ApplyPosition()
+            self:ResetTimers()
+            self:Play("confusedLanding")
         end
     end
 
@@ -726,7 +981,7 @@ function Pet:PlayTalkingAnimation()
 end
 
 function Pet:CanAcceptLeftClick()
-    if self.crowLaunch then
+    if self.crowLaunch or self.deathGrip then
         return false
     end
     return not self.animationName or LEFT_CLICK_SAFE_ANIMATIONS[self.animationName] == true
@@ -807,7 +1062,8 @@ function Pet:WakeFromIdle()
 end
 
 function Pet:BeginIdleSleep()
-    if self.isIdleSleeping or self.animation or self.isDragging or self.isWatchingChat or self.crowLaunch then
+    if self.isIdleSleeping or self.animation or self.isDragging or self.isWatchingChat
+        or self.crowLaunch or self.deathGrip then
         return false
     end
     if Addon.Analyzer and Addon.Analyzer.running then
@@ -932,6 +1188,72 @@ function Pet:Play(name)
     self.animationRemaining = animation.durations[1] * (animation.durationScale or 1)
     self:SetSheet(animation.sheet or "main")
     self:SetSpriteFrame(animation.frames[1])
+end
+
+function Pet:ShowSpecificThought(thought)
+    if not self.thoughtBubble or not self.thoughtTexture then
+        return false
+    end
+
+    thought = math.max(1, math.min(3, tonumber(thought) or 1))
+    self:Show()
+    self:WakeFromIdle()
+    self:HideBubble()
+    self:HideThought(false)
+
+    local zeroIndex = thought - 1
+    local column = zeroIndex % 2
+    local row = math.floor(zeroIndex / 2)
+    self.lastThought = thought
+    self.thoughtTexture:SetTexCoord(column / 2, (column + 1) / 2, row / 2, (row + 1) / 2)
+    self.thoughtBubble:SetAlpha(1)
+    self.thoughtBubble:Show()
+    self.thoughtRemaining = 4.5
+    self.thoughtTimer = RandomThoughtDelay()
+    return true
+end
+
+function Pet:StopEmoteTest()
+    if self.isMercenaryCasting then
+        return false, "A real Mercenary cast is currently controlling Arnold."
+    end
+    self.manualEmoteTest = nil
+    self:CancelCrowLaunch()
+    self:CancelDeathGrip()
+    self:WakeFromIdle()
+    self:HideBubble()
+    self:HideThought(true)
+    self:FinishAnimation()
+    self:Show()
+    return true
+end
+
+function Pet:PlayEmoteTest(name)
+    if not ANIMATIONS[name] then
+        return false, "Unknown animation: " .. tostring(name)
+    end
+    if self.isMercenaryCasting then
+        return false, "A real Mercenary cast is currently controlling Arnold."
+    end
+
+    self:CancelCrowLaunch()
+    self:CancelDeathGrip()
+    self:WakeFromIdle()
+    self:HideBubble()
+    self:HideThought(false)
+    self:FinishAnimation()
+    self:Show()
+    self.manualEmoteTest = name
+
+    if name == "snoring" then
+        self.idleSleepTimer = 0
+        if not self:BeginIdleSleep() then
+            return false, "Arnold cannot sleep during another protected state."
+        end
+    else
+        self:Play(name)
+    end
+    return true
 end
 
 function Pet:FinishAnimation()
@@ -1098,6 +1420,9 @@ function Pet:Update(elapsed)
     if self:UpdateCrowLaunch(elapsed) then
         return
     end
+    if self:UpdateDeathGrip(elapsed) then
+        return
+    end
 
     self:UpdateTypingGaze(elapsed)
     if self.isWatchingChat and not self.isDragging and not self.animation then
@@ -1148,6 +1473,7 @@ end
 
 function Pet:ResetPosition()
     self:CancelCrowLaunch()
+    self:CancelDeathGrip()
     Addon.db.pet.x = 360
     Addon.db.pet.y = -180
     self:ApplyPosition()
@@ -1173,6 +1499,7 @@ function Pet:Hide(keepAnalyzerOpen)
         return
     end
     self:CancelCrowLaunch()
+    self:CancelDeathGrip()
     Addon.db.pet.shown = false
     self:HideThought(false)
     self.frame:Hide()
@@ -1259,6 +1586,22 @@ function Pet:CreateCrowLaunchEffect()
     self.crowLaunchTexture = texture
 end
 
+function Pet:CreateDeathGripEffect()
+    local frame = CreateFrame("Frame", nil, UIParent)
+    frame:SetWidth(512)
+    frame:SetHeight(112)
+    frame:SetFrameStrata("DIALOG")
+    frame:SetFrameLevel(95)
+
+    local texture = frame:CreateTexture(nil, "ARTWORK")
+    texture:SetAllPoints(frame)
+    texture:SetTexture(DEATH_GRIP_SHEET)
+    frame:Hide()
+
+    self.deathGripFrame = frame
+    self.deathGripTexture = texture
+end
+
 function Pet:CreateLevitateCloudEffect()
     local frame = CreateFrame("Frame", nil, UIParent)
     frame:SetWidth(170)
@@ -1317,6 +1660,208 @@ function Pet:CreateSnoreEffect(parent)
     self.snoreLetters = letters
 end
 
+local function HumanizeAnimationName(name)
+    local label = tostring(name or "")
+    label = string.gsub(label, "(%l)(%u)", "%1 %2")
+    label = string.gsub(label, "^%l", string.upper)
+    return label
+end
+
+function Pet:GetEmoteTestEntries()
+    local entries = {}
+    local added = {}
+
+    for _, name in ipairs(EMOTE_TEST_ORDER) do
+        if ANIMATIONS[name] then
+            table.insert(entries, {
+                name = name,
+                label = EMOTE_TEST_LABELS[name] or HumanizeAnimationName(name),
+                loop = ANIMATIONS[name].loop and true or false,
+            })
+            added[name] = true
+        end
+    end
+
+    -- Keep the tester complete if a new animation is registered later but its
+    -- friendly label has not been added yet.
+    local extraNames = {}
+    for name in pairs(ANIMATIONS) do
+        if not added[name] then
+            table.insert(extraNames, name)
+        end
+    end
+    table.sort(extraNames)
+    for _, name in ipairs(extraNames) do
+        table.insert(entries, {
+            name = name,
+            label = HumanizeAnimationName(name),
+            loop = ANIMATIONS[name].loop and true or false,
+        })
+    end
+
+    table.insert(entries, { action = "thought1", label = "Thought: Crow" })
+    table.insert(entries, { action = "thought2", label = "Thought: Treasure Chest" })
+    table.insert(entries, { action = "thought3", label = "Thought: Dice" })
+    table.insert(entries, { action = "crowLaunch", label = "Crow Blast / Return" })
+    table.insert(entries, { action = "deathGrip", label = "Death Grip / Return" })
+    return entries
+end
+
+function Pet:RunEmoteTestEntry(entry)
+    if not entry then
+        return false, "No emote selected."
+    end
+    if self.isMercenaryCasting then
+        return false, "A real Mercenary cast is currently controlling Arnold."
+    end
+    if entry.name then
+        return self:PlayEmoteTest(entry.name)
+    elseif entry.action == "thought1" then
+        self:StopEmoteTest()
+        return self:ShowSpecificThought(1)
+    elseif entry.action == "thought2" then
+        self:StopEmoteTest()
+        return self:ShowSpecificThought(2)
+    elseif entry.action == "thought3" then
+        self:StopEmoteTest()
+        return self:ShowSpecificThought(3)
+    elseif entry.action == "crowLaunch" then
+        self:StopEmoteTest()
+        return self:TriggerCrowLaunch()
+    elseif entry.action == "deathGrip" then
+        self:StopEmoteTest()
+        return self:TriggerDeathGrip()
+    end
+    return false, "Unknown emote test action."
+end
+
+function Pet:CreateEmoteTestFrame()
+    if self.emoteTestFrame then
+        return
+    end
+
+    local frame = CreateFrame("Frame", "ActuallyArnoldEmoteTestFrame", UIParent)
+    frame:SetWidth(680)
+    frame:SetHeight(480)
+    frame:SetPoint("CENTER", UIParent, "CENTER", 0, 20)
+    frame:SetFrameStrata("DIALOG")
+    frame:SetFrameLevel(220)
+    frame:SetMovable(true)
+    frame:SetClampedToScreen(true)
+    frame:EnableMouse(true)
+    frame:RegisterForDrag("LeftButton")
+    frame:SetScript("OnDragStart", function(self) self:StartMoving() end)
+    frame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
+    frame:SetBackdrop({
+        bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+        edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+        tile = true,
+        tileSize = 32,
+        edgeSize = 32,
+        insets = { left = 11, right = 12, top = 12, bottom = 11 },
+    })
+
+    local title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", frame, "TOP", 0, -18)
+    title:SetText("Arnold Emote Test")
+    title:SetTextColor(1, 0.82, 0.16)
+
+    local subtitle = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    subtitle:SetPoint("TOP", title, "BOTTOM", 0, -5)
+    subtitle:SetText("Every registered animation and special pet effect")
+
+    local close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
+    close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -5, -5)
+
+    local entries = self:GetEmoteTestEntries()
+    local columns = 3
+    local buttonWidth = 204
+    local buttonHeight = 25
+    local left = 24
+    local top = -66
+    local horizontalGap = 9
+    local verticalGap = 5
+
+    for index, entry in ipairs(entries) do
+        local column = (index - 1) % columns
+        local row = math.floor((index - 1) / columns)
+        local button = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+        button:SetWidth(buttonWidth)
+        button:SetHeight(buttonHeight)
+        button:SetPoint("TOPLEFT", frame, "TOPLEFT",
+            left + column * (buttonWidth + horizontalGap),
+            top - row * (buttonHeight + verticalGap))
+        button:SetText(entry.label)
+        button.entry = entry
+        button:SetScript("OnClick", function(self)
+            local ok, reason = Pet:RunEmoteTestEntry(self.entry)
+            if ok then
+                frame.status:SetText("Playing: " .. self.entry.label)
+                frame.status:SetTextColor(0.35, 1, 0.45)
+            else
+                frame.status:SetText(reason or ("Could not play " .. self.entry.label))
+                frame.status:SetTextColor(1, 0.3, 0.25)
+            end
+        end)
+        button:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+            GameTooltip:AddLine(self.entry.label, 1, 0.82, 0.16)
+            if self.entry.name then
+                GameTooltip:AddLine("Animation key: " .. self.entry.name, 0.7, 0.75, 0.85)
+                if self.entry.loop then
+                    GameTooltip:AddLine("Loops until Stop / Reset is pressed.", 1, 0.55, 0.2, true)
+                end
+            end
+            GameTooltip:Show()
+        end)
+        button:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    end
+
+    local stop = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    stop:SetWidth(150)
+    stop:SetHeight(27)
+    stop:SetPoint("BOTTOM", frame, "BOTTOM", -82, 22)
+    stop:SetText("Stop / Reset Arnold")
+    stop:SetScript("OnClick", function()
+        local ok, reason = Pet:StopEmoteTest()
+        if ok then
+            frame.status:SetText("Arnold reset to neutral.")
+            frame.status:SetTextColor(0.8, 0.8, 0.8)
+        else
+            frame.status:SetText(reason or "Arnold could not be reset.")
+            frame.status:SetTextColor(1, 0.3, 0.25)
+        end
+    end)
+
+    local hide = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    hide:SetWidth(150)
+    hide:SetHeight(27)
+    hide:SetPoint("LEFT", stop, "RIGHT", 14, 0)
+    hide:SetText("Close Tester")
+    hide:SetScript("OnClick", function() frame:Hide() end)
+
+    local status = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    status:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 24, 58)
+    status:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -24, 58)
+    status:SetJustifyH("CENTER")
+    status:SetText("Choose an emote. Buttons automatically show Arnold.")
+    status:SetTextColor(0.8, 0.8, 0.8)
+    frame.status = status
+
+    frame:SetScript("OnHide", function()
+        GameTooltip:Hide()
+    end)
+    frame:Hide()
+    self.emoteTestFrame = frame
+end
+
+function Pet:ShowEmoteTest()
+    self:Create()
+    self:CreateEmoteTestFrame()
+    self.emoteTestFrame:Show()
+    self.emoteTestFrame:Raise()
+end
+
 function Pet:Create()
     if self.frame then
         return
@@ -1345,6 +1890,7 @@ function Pet:Create()
     self:CreateBubble(button)
     self:CreateThoughtBubble(button)
     self:CreateCrowLaunchEffect()
+    self:CreateDeathGripEffect()
     self:CreateLevitateCloudEffect()
     self:CreateContextMenu()
     self:CreateSnoreEffect(button)

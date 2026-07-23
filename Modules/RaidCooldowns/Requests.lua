@@ -821,7 +821,6 @@ end
 
 function Requests:CreateAlert()
     local frame = ARC.AlertUI:CreateAlertFrame("ActuallyARCRequestAlertFrame")
-    frame.decline:SetScript("OnClick", function() Requests:RejectIncoming("DECLINED") end)
     self.alert = frame
 end
 
@@ -831,17 +830,11 @@ function Requests:ShowAlert()
     self.alert.icon:SetTexture(ARC.SpellInfo:ResolveSpellIcon(incoming.spellID))
     self.alert.heading:SetText("USE "
         .. string.upper(ARC.SpellInfo:ResolveSpellName(incoming.spellID)) .. " NOW")
-    self.alert.detail:SetText(tostring(incoming.requesterName) .. " requested this cooldown")
+    self.alert.detail:SetText("")
     self.alert.arcDeadline = incoming.deadline
     self:UpdateAlert(ARC:Now())
     self.alert:Show()
-    if ARC.db.profile.requests.sound ~= false then
-        if PlaySoundFile then
-            PlaySoundFile("Sound\\Interface\\RaidWarning.wav")
-        elseif PlaySound then
-            PlaySound("RaidWarning")
-        end
-    end
+    ARC.AlertUI:PlaySound()
 end
 
 function Requests:UpdateAlert(now)

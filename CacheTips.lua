@@ -4,7 +4,7 @@ local Addon = Actually
 local CacheTips = {}
 Addon.CacheTips = CacheTips
 local SetBackdrop = Addon.Util.SetBackdrop
-local ROLE_PANEL_TOP = -342
+local ROLE_PANEL_TOP = -376
 
 local ROLE_DEFINITIONS = {
     {
@@ -294,7 +294,7 @@ function CacheTips:Create()
     local arcAlerts = CreateFrame("Frame", nil, root)
     arcAlerts:SetPoint("TOPLEFT", root, "TOPLEFT", 0, -202)
     arcAlerts:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, -202)
-    arcAlerts:SetHeight(91)
+    arcAlerts:SetHeight(125)
     SetBackdrop(arcAlerts, { 0.030, 0.055, 0.075, 0.97 }, { 0.20, 0.72, 0.96, 0.88 })
 
     local arcTitle = arcAlerts:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -358,8 +358,72 @@ function CacheTips:Create()
     end)
     self.arcAlertResetButton = arcReset
 
+    local arcSound = CreateFrame("CheckButton", "ActuallyARCAlertSoundCheckButton",
+        arcAlerts, "UICheckButtonTemplate")
+    arcSound:SetWidth(26)
+    arcSound:SetHeight(26)
+    arcSound:SetPoint("TOPLEFT", arcAlerts, "TOPLEFT", 15, -65)
+    local arcSoundLabel = arcSound:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    arcSoundLabel:SetPoint("LEFT", arcSound, "RIGHT", 3, 1)
+    arcSoundLabel:SetText("Sound")
+    arcSound:SetScript("OnClick", function(owner)
+        local arc = Addon.Modules and Addon.Modules.RaidCooldowns
+        if arc and arc.AlertUI and arc.AlertUI.initialized then
+            arc.AlertUI:SetSoundEnabled(owner:GetChecked() == 1 or owner:GetChecked() == true)
+        end
+    end)
+    self.arcAlertSoundCheckbox = arcSound
+
+    local arcSoundDropdown = CreateFrame("Frame", "ActuallyARCAlertSoundDropdown",
+        arcAlerts, "UIDropDownMenuTemplate")
+    arcSoundDropdown:SetPoint("LEFT", arcSoundLabel, "RIGHT", -8, -1)
+    UIDropDownMenu_SetWidth(arcSoundDropdown, 145)
+    UIDropDownMenu_Initialize(arcSoundDropdown, function()
+        local arc = Addon.Modules and Addon.Modules.RaidCooldowns
+        if not arc or not arc.AlertUI then return end
+        local selected = arc.AlertUI:GetSound()
+        for _, option in ipairs(arc.AlertUI:GetSoundOptions()) do
+            local soundKey, soundLabel = option.key, option.label
+            local info = UIDropDownMenu_CreateInfo()
+            info.text = soundLabel
+            info.value = soundKey
+            info.checked = selected == soundKey
+            info.func = function()
+                arc.AlertUI:SetSound(soundKey, true)
+                CloseDropDownMenus()
+            end
+            UIDropDownMenu_AddButton(info)
+        end
+    end)
+    self.arcAlertSoundDropdown = arcSoundDropdown
+
+    local function CreateEffectCheckbox(name, label, x, effect)
+        local checkbox = CreateFrame("CheckButton", name, arcAlerts, "UICheckButtonTemplate")
+        checkbox:SetWidth(26)
+        checkbox:SetHeight(26)
+        checkbox:SetPoint("TOPLEFT", arcAlerts, "TOPLEFT", x, -65)
+        local text = checkbox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        text:SetPoint("LEFT", checkbox, "RIGHT", 3, 1)
+        text:SetText(label)
+        checkbox:SetScript("OnClick", function(owner)
+            local arc = Addon.Modules and Addon.Modules.RaidCooldowns
+            if arc and arc.AlertUI and arc.AlertUI.initialized then
+                arc.AlertUI:SetEffect(effect,
+                    owner:GetChecked() == 1 or owner:GetChecked() == true)
+            end
+        end)
+        return checkbox
+    end
+
+    self.arcAlertBounceCheckbox = CreateEffectCheckbox(
+        "ActuallyARCAlertBounceCheckButton", "Bounce", 330, "bounce")
+    self.arcAlertGlowCheckbox = CreateEffectCheckbox(
+        "ActuallyARCAlertGlowCheckButton", "Glow", 445, "glow")
+    self.arcAlertPulseCheckbox = CreateEffectCheckbox(
+        "ActuallyARCAlertPulseCheckButton", "Pulse", 545, "pulse")
+
     local roleHeading = root:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    roleHeading:SetPoint("TOPLEFT", root, "TOPLEFT", 2, -310)
+    roleHeading:SetPoint("TOPLEFT", root, "TOPLEFT", 2, -344)
     roleHeading:SetText("Role Tips")
     roleHeading:SetTextColor(0.82, 0.86, 0.94)
 
@@ -430,15 +494,48 @@ function CacheTips:RefreshARCAlertControls()
     self.arcAlertScaleLabel:SetText("Size: " .. tostring(math.floor(scale * 100 + 0.5)) .. "%")
     self.arcAlertMoveButton:SetText(ready and arc.AlertUI:IsPositioning()
         and "Done Moving" or "Preview / Move")
+    if self.arcAlertSoundCheckbox then
+        self.arcAlertSoundCheckbox:SetChecked(ready and arc.AlertUI:IsSoundEnabled() or false)
+    end
+    if self.arcAlertSoundDropdown and UIDropDownMenu_SetText then
+        UIDropDownMenu_SetText(self.arcAlertSoundDropdown,
+            ready and arc.AlertUI:GetSoundLabel() or "Raid Warning")
+    end
+    if self.arcAlertBounceCheckbox then
+        self.arcAlertBounceCheckbox:SetChecked(
+            ready and arc.AlertUI:GetEffect("bounce") or false)
+    end
+    if self.arcAlertGlowCheckbox then
+        self.arcAlertGlowCheckbox:SetChecked(
+            ready and arc.AlertUI:GetEffect("glow") or false)
+    end
+    if self.arcAlertPulseCheckbox then
+        self.arcAlertPulseCheckbox:SetChecked(
+            ready and arc.AlertUI:GetEffect("pulse") or false)
+    end
     self.refreshingARCAlertControls = false
     if ready then
         self.arcAlertScaleSlider:Enable()
         self.arcAlertMoveButton:Enable()
         self.arcAlertResetButton:Enable()
+        if self.arcAlertSoundCheckbox then self.arcAlertSoundCheckbox:Enable() end
+        if self.arcAlertSoundDropdown and UIDropDownMenu_EnableDropDown then
+            UIDropDownMenu_EnableDropDown(self.arcAlertSoundDropdown)
+        end
+        if self.arcAlertBounceCheckbox then self.arcAlertBounceCheckbox:Enable() end
+        if self.arcAlertGlowCheckbox then self.arcAlertGlowCheckbox:Enable() end
+        if self.arcAlertPulseCheckbox then self.arcAlertPulseCheckbox:Enable() end
     else
         self.arcAlertScaleSlider:Disable()
         self.arcAlertMoveButton:Disable()
         self.arcAlertResetButton:Disable()
+        if self.arcAlertSoundCheckbox then self.arcAlertSoundCheckbox:Disable() end
+        if self.arcAlertSoundDropdown and UIDropDownMenu_DisableDropDown then
+            UIDropDownMenu_DisableDropDown(self.arcAlertSoundDropdown)
+        end
+        if self.arcAlertBounceCheckbox then self.arcAlertBounceCheckbox:Disable() end
+        if self.arcAlertGlowCheckbox then self.arcAlertGlowCheckbox:Disable() end
+        if self.arcAlertPulseCheckbox then self.arcAlertPulseCheckbox:Disable() end
     end
 end
 

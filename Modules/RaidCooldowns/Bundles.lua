@@ -726,11 +726,6 @@ end
 
 function Bundles:CreateAlert()
     local frame = ARC.AlertUI:CreateAlertFrame("ActuallyARCBundleAlertFrame")
-    frame.decline:SetScript("OnClick", function()
-        if Bundles.activeIncomingID then
-            Bundles:RejectIncoming(Bundles.activeIncomingID, "DECLINED")
-        end
-    end)
     self.alert = frame
 end
 
@@ -786,17 +781,14 @@ function Bundles:PlayAlertSound()
     local now = ARC:Now()
     if self.lastAlertSound and now - self.lastAlertSound <= 1 then return false end
     self.lastAlertSound = now
-    if ARC.db.profile.requests.sound == false then return false end
-    if PlaySoundFile then PlaySoundFile("Sound\\Interface\\RaidWarning.wav")
-    elseif PlaySound then PlaySound("RaidWarning") end
-    return true
+    return ARC.AlertUI:PlaySound()
 end
 
 function Bundles:PlayFailureSound()
     local now = ARC:Now()
     if self.lastAlertSound and now - self.lastAlertSound <= 1 then return false end
     self.lastAlertSound = now
-    if ARC.db.profile.requests.sound == false then return false end
+    if not ARC.AlertUI:IsSoundEnabled() then return false end
     if PlaySound then PlaySound("igQuestFailed")
     elseif PlaySoundFile then PlaySoundFile("Sound\\Interface\\Error.wav") end
     return true
@@ -861,7 +853,7 @@ function Bundles:RefreshAlert(playSound)
     self.alert.icon:SetTexture(ARC.SpellInfo:ResolveSpellIcon(incoming.spellID))
     self.alert.heading:SetText("USE "
         .. string.upper(ARC.SpellInfo:ResolveSpellName(incoming.spellID)) .. " NOW")
-    local line = tostring(incoming.requesterName) .. " - " .. tostring(incoming.bundleName)
+    local line = tostring(incoming.bundleName)
     if queued > 0 then
         line = line .. "  |cffaaaaaa(" .. tostring(queued)
             .. (queued == 1 and " more cooldown queued|r" or " more cooldowns queued|r")
