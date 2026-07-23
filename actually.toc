@@ -4,8 +4,11 @@
 ## Author: Luke
 ## Version: 0.3.0
 ## SavedVariables: ActuallyDB
+## OptionalDeps: TurboPlates
 
 Core.lua
+Modules\RaidCC\Core.lua
+Modules\RaidCC\Options.lua
 Official.lua
 Discussion.lua
 TierBoard.lua
@@ -46,7 +49,10 @@ Modules\RaidCooldowns\CombatLog.lua
 Modules\RaidCooldowns\Renderer.lua
 Modules\RaidCooldowns\Requests.lua
 Modules\RaidCooldowns\Bundles.lua
+Modules\RaidCooldowns\Commander.lua
+Modules\RaidCooldowns\UserList.lua
 Modules\RaidCooldowns\BundleConfig.lua
+Modules\RaidCooldowns\CommanderConfig.lua
 Modules\RaidCooldowns\SpellConfig.lua
 Modules\RaidCooldowns\TestUI.lua
 Modules\RaidCooldowns\SpoofTest.lua

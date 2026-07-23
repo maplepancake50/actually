@@ -57,6 +57,10 @@ function Roster:Scan()
     end
     self.generation = self.generation + 1
     ARC.State:UpdateRoster(self)
+    if ARC.Automation and ARC.Automation.initialized then ARC.Automation:OnRosterChanged() end
+    if ARC.UserList and ARC.UserList.initialized and ARC.UserList.frame:IsShown() then
+        ARC.UserList:Refresh()
+    end
     if ARC.Requests and ARC.Requests.initialized then ARC.Requests:OnRosterChanged() end
     if ARC.Bundles and ARC.Bundles.initialized then ARC.Bundles:OnRosterChanged() end
 end

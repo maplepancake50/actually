@@ -289,7 +289,13 @@ function Debug:FindHiddenTalents()
 end
 
 function Debug:Help()
-    ARC:Print("/act arc commands: config, bundles, ui, spoof, probe, apiprobe <id>, findhidden, scan, state, peers, request, test, debug, dumpbook [filter], dumptalents [filter]")
+    ARC:Print("/arc commands: commander [config], config, bundles, ui, spoof, probe, apiprobe <id>, findhidden, scan, state, peers, request, test, debug, dumpbook [filter], dumptalents [filter]")
+end
+
+local function canConfigure()
+    if ARC.Roster and ARC.Roster:IsLocalCoordinator() then return true end
+    ARC:Print("only the party leader, raid leader, or raid assistants can change ARC configuration")
+    return false
 end
 
 function Debug:Handle(input)
@@ -297,12 +303,37 @@ function Debug:Handle(input)
     local command, argument = string.match(input, "^%s*(%S*)%s*(.-)%s*$")
     command = string.lower(command or "")
     if command == "config" then
+        if not canConfigure() then return end
         if ARC.SpellConfig and ARC.SpellConfig.Toggle then
             ARC.SpellConfig:Toggle()
         else
             ARC:Print("SpellConfig unavailable; fully restart the game client")
         end
+    elseif command == "commander" and string.lower(argument or "") == "config" then
+        if not canConfigure() then return end
+        if ARC.CommanderConfig and ARC.CommanderConfig.Toggle then
+            ARC.CommanderConfig:Toggle()
+        else
+            ARC:Print("CommanderConfig unavailable; fully restart the game client")
+        end
+    elseif command == "commander" then
+        if argument ~= "" then
+            ARC:Print("usage: /arc commander [config]")
+        elseif ARC.Commander and ARC.Commander.Toggle then
+            local shown = ARC.Commander:Toggle()
+            ARC:Print("commander bar " .. (shown and "shown" or "hidden"))
+        else
+            ARC:Print("Commander unavailable; fully restart the game client")
+        end
+    elseif command == "commands" then
+        if not canConfigure() then return end
+        if ARC.CommanderConfig and ARC.CommanderConfig.Toggle then
+            ARC.CommanderConfig:Toggle()
+        else
+            ARC:Print("CommanderConfig unavailable; fully restart the game client")
+        end
     elseif command == "bundles" then
+        if not canConfigure() then return end
         if ARC.BundleConfig and ARC.BundleConfig.Toggle then
             ARC.BundleConfig:Toggle()
         else

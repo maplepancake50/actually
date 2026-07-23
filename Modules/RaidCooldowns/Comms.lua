@@ -15,6 +15,9 @@ function Comms:Initialize()
     self.sequence = 0
     self.lastRequest = -100
     self.lastState = -100
+    self.stateDueAt = nil
+    self.remoteRequests = {}
+    self.protocolWarnings = {}
     ARC:RegisterComm(ARC.Constants.COMM_PREFIX, function(...)
         self:OnCommReceived(...)
     end)
@@ -54,6 +57,8 @@ function Comms:BuildStateRows()
             canonicalID,
             math.floor(math.max(0, (spell.readyAt or 0) - now) * 10 + 0.5),
             math.floor(math.max(0, spell.duration or 0) * 10 + 0.5),
+            math.floor(math.max(0, tonumber(spell.charges) or 0)),
+            math.floor(math.max(0, tonumber(spell.maxCharges) or 0)),
         })
     end
     table.sort(rows, function(a, b) return a[1] < b[1] end)
@@ -74,56 +79,96 @@ function Comms:SendState(force, reason)
 end
 
 function Comms:ScheduleState(delay, reason)
+    delay = math.max(0, tonumber(delay) or 0.1)
+    local dueAt = ARC:Now() + delay
+    if self.stateTimer and self.stateDueAt and self.stateDueAt <= dueAt then return end
     if self.stateTimer then ARC:CancelTimer(self.stateTimer, true) end
+    self.stateDueAt = dueAt
     self.stateTimer = ARC:ScheduleTimer(function()
         self.stateTimer = nil
+        self.stateDueAt = nil
         self:SendState(false, reason)
-    end, delay or 0.1)
+    end, delay)
 end
 
 function Comms:SendCast(canonicalID, value, target)
     if not ARC.Registry:Get(canonicalID) then return false end
     local remaining = math.floor(math.max(0, value.remaining or 0) * 10 + 0.5)
     local duration = math.floor(math.max(0, value.duration or 0) * 10 + 0.5)
+    local charges = math.floor(math.max(0, tonumber(value.charges) or 0))
+    local maxCharges = math.floor(math.max(0, tonumber(value.maxCharges) or 0))
     if target and #target > 60 then target = string.sub(target, 1, 60) end
     return self:Send("CAST", "ALERT", self.session, self:NextSequence(), canonicalID,
-        remaining, duration, target)
+        remaining, duration, target, charges, maxCharges)
 end
 
-function Comms:SendUseRequest(requestID, targetKey, canonicalID, timeout)
+function Comms:SendLeaseClaim(token, duration)
+    return self:Send("LEASE_CLAIM", "ALERT", self.session, self:NextSequence(),
+        token, math.floor(duration * 10 + 0.5))
+end
+
+function Comms:SendLeaseHold(token, duration)
+    return self:Send("LEASE_HOLD", "ALERT", self.session, self:NextSequence(),
+        token, math.floor(duration * 10 + 0.5))
+end
+
+function Comms:SendLeaseRelease(token)
+    return self:Send("LEASE_RELEASE", "NORMAL", self.session, self:NextSequence(), token)
+end
+
+function Comms:SendUseRequest(requestID, attemptID, leaseToken, targetKey, canonicalID, timeout)
     return self:Send("USE_REQ", "ALERT", self.session, self:NextSequence(), requestID,
-        targetKey, canonicalID, math.floor(timeout * 10 + 0.5))
+        attemptID, leaseToken, targetKey, canonicalID, math.floor(timeout * 10 + 0.5))
 end
 
-function Comms:SendUseStatus(requestID, status, canonicalID)
+function Comms:SendUseStatus(requestID, attemptID, leaseToken, status, canonicalID)
     return self:Send("USE_STATUS", "ALERT", self.session, self:NextSequence(),
-        requestID, status, canonicalID)
+        requestID, attemptID, leaseToken, status, canonicalID)
 end
 
-function Comms:SendUseCancel(requestID, targetKey)
+function Comms:SendUseCancel(requestID, attemptID, leaseToken, targetKey)
     return self:Send("USE_CANCEL", "ALERT", self.session, self:NextSequence(),
-        requestID, targetKey)
+        requestID, attemptID, leaseToken, targetKey)
 end
 
-function Comms:SendBundleRequest(bundleID, bundleName, itemID, targetKey, canonicalID, timeout)
+function Comms:SendUseSync(requestID, attemptID, leaseToken, targetKey, canonicalID, remaining)
+    return self:Send("USE_SYNC", "ALERT", self.session, self:NextSequence(),
+        requestID, attemptID, leaseToken, targetKey, canonicalID,
+        math.floor(math.max(0, remaining) * 10 + 0.5))
+end
+
+function Comms:SendUseEnd(requestID, leaseToken)
+    return self:Send("USE_END", "ALERT", self.session, self:NextSequence(),
+        requestID, leaseToken)
+end
+
+function Comms:SendBundleRequest(bundleID, bundleName, itemID, attemptID,
+    leaseToken, targetKey, canonicalID, timeout, order)
     if #bundleName > 60 then bundleName = string.sub(bundleName, 1, 60) end
     return self:Send("BUNDLE_REQ", "ALERT", self.session, self:NextSequence(),
-        bundleID, bundleName, itemID, targetKey, canonicalID,
-        math.floor(timeout * 10 + 0.5))
+        bundleID, bundleName, itemID, attemptID, leaseToken, targetKey, canonicalID,
+        math.floor(timeout * 10 + 0.5), math.floor(tonumber(order) or 1))
 end
 
-function Comms:SendBundleStatus(bundleID, itemID, status, canonicalID)
+function Comms:SendBundleStatus(bundleID, itemID, attemptID, leaseToken, status, canonicalID)
     return self:Send("BUNDLE_STATUS", "ALERT", self.session, self:NextSequence(),
-        bundleID, itemID, status, canonicalID)
+        bundleID, itemID, attemptID, leaseToken, status, canonicalID)
 end
 
-function Comms:SendBundleCancel(itemID, targetKey)
+function Comms:SendBundleCancel(itemID, attemptID, leaseToken, targetKey)
     return self:Send("BUNDLE_CANCEL", "ALERT", self.session, self:NextSequence(),
-        itemID, targetKey)
+        itemID, attemptID, leaseToken, targetKey)
 end
 
-function Comms:SendBundleSync(bundleID)
-    return self:Send("BUNDLE_SYNC", "NORMAL", self.session, self:NextSequence(), bundleID)
+function Comms:SendBundleSync(bundleID, bundleName, leaseToken, rows)
+    if #bundleName > 60 then bundleName = string.sub(bundleName, 1, 60) end
+    return self:Send("BUNDLE_SYNC", "NORMAL", self.session, self:NextSequence(),
+        bundleID, bundleName, leaseToken, rows)
+end
+
+function Comms:SendBundleEnd(bundleID, leaseToken)
+    return self:Send("BUNDLE_END", "ALERT", self.session, self:NextSequence(),
+        bundleID, leaseToken)
 end
 
 function Comms:SchedulePeriodicReport()
@@ -141,6 +186,7 @@ function Comms:DecodeRows(serializedRows)
         if index > 200 or type(row) ~= "table" then return nil, "invalid row" end
         local canonicalID = ARC.Registry:Canonicalize(row[1])
         local remainingTenths, durationTenths = row[2], row[3]
+        local charges, maxCharges = row[4] or 0, row[5] or 0
         if not canonicalID then return nil, "unregistered spell" end
         if not validInteger(remainingTenths, 0, ARC.Constants.MAX_COOLDOWN * 10) then
             return nil, "invalid remaining"
@@ -148,7 +194,14 @@ function Comms:DecodeRows(serializedRows)
         if not validInteger(durationTenths, 0, ARC.Constants.MAX_COOLDOWN * 10) then
             return nil, "invalid duration"
         end
-        rows[canonicalID] = { remaining = remainingTenths / 10, duration = durationTenths / 10 }
+        if not validInteger(charges, 0, 100) or not validInteger(maxCharges, 0, 100)
+            or charges > maxCharges then return nil, "invalid charges" end
+        rows[canonicalID] = {
+            remaining = remainingTenths / 10,
+            duration = durationTenths / 10,
+            charges = charges,
+            maxCharges = maxCharges,
+        }
     end
     return rows
 end
@@ -170,11 +223,19 @@ function Comms:OnCommReceived(prefix, message, distribution, sender)
     end
     local messageType, protocol = decoded[2], decoded[3]
     if protocol ~= ARC.Constants.PROTOCOL_VERSION then
+        if not self.protocolWarnings[identity.key] then
+            self.protocolWarnings[identity.key] = true
+            ARC:Print("protocol mismatch with " .. tostring(identity.name)
+                .. "; update ARC on both clients")
+        end
         ARC:Debug("rejected protocol " .. tostring(protocol))
         return
     end
 
     if messageType == "REQ" then
+        local now = ARC:Now()
+        if now - (self.remoteRequests[identity.key] or -100) < 3 then return end
+        self.remoteRequests[identity.key] = now
         self:ScheduleState(math.random(10, 40) / 100, "request")
         return
     end
@@ -195,62 +256,136 @@ function Comms:OnCommReceived(prefix, message, distribution, sender)
     elseif messageType == "CAST" then
         local canonicalID = ARC.Registry:Canonicalize(decoded[6])
         local remainingTenths, durationTenths, target = decoded[7], decoded[8], decoded[9]
+        local charges, maxCharges = decoded[10] or 0, decoded[11] or 0
         if not canonicalID
             or not validInteger(remainingTenths, 0, ARC.Constants.MAX_COOLDOWN * 10)
             or not validInteger(durationTenths, 0, ARC.Constants.MAX_COOLDOWN * 10)
+            or not validInteger(charges, 0, 100)
+            or not validInteger(maxCharges, 0, 100) or charges > maxCharges
             or (target ~= nil and (type(target) ~= "string" or #target > 60)) then return end
         ARC.State:ApplyCast(identity.key, identity, session, sequence, canonicalID, {
             remaining = remainingTenths / 10,
             duration = durationTenths / 10,
             target = target,
+            charges = charges,
+            maxCharges = maxCharges,
         })
+    elseif messageType == "LEASE_CLAIM" or messageType == "LEASE_HOLD" then
+        local token, durationTenths = decoded[6], decoded[7]
+        if not validString(token, 120) or not validInteger(durationTenths, 10, 300) then
+            return
+        end
+        if messageType == "LEASE_CLAIM" then
+            ARC.Automation:OnLeaseClaim(identity, token, durationTenths / 10)
+        else
+            ARC.Automation:OnLeaseHold(identity, token, durationTenths / 10)
+        end
+    elseif messageType == "LEASE_RELEASE" then
+        local token = decoded[6]
+        if validString(token, 120) then ARC.Automation:OnLeaseRelease(identity, token) end
     elseif messageType == "USE_REQ" then
-        local requestID, targetKey = decoded[6], decoded[7]
-        local canonicalID = ARC.Registry:Canonicalize(decoded[8])
-        local timeoutTenths = decoded[9]
-        if not validString(requestID, 120) or not validString(targetKey, 100)
+        local requestID, attemptID, leaseToken, targetKey =
+            decoded[6], decoded[7], decoded[8], decoded[9]
+        local canonicalID = ARC.Registry:Canonicalize(decoded[10])
+        local timeoutTenths = decoded[11]
+        if not validString(requestID, 120) or not validString(attemptID, 160)
+            or not validString(leaseToken, 120) or not validString(targetKey, 100)
             or not canonicalID or not validInteger(timeoutTenths, 30, 300) then return end
-        ARC.Requests:OnRemoteRequest(identity, session, sequence, requestID,
-            targetKey, canonicalID, timeoutTenths / 10)
+        ARC.Requests:OnRemoteRequest(identity, session, sequence, requestID, attemptID,
+            leaseToken, targetKey, canonicalID, timeoutTenths / 10)
     elseif messageType == "USE_STATUS" then
-        local requestID, status = decoded[6], decoded[7]
-        local canonicalID = ARC.Registry:Canonicalize(decoded[8])
+        local requestID, attemptID, leaseToken, status =
+            decoded[6], decoded[7], decoded[8], decoded[9]
+        local canonicalID = ARC.Registry:Canonicalize(decoded[10])
         local allowed = status == "ACK" or status == "CAST" or status == "DECLINED"
             or status == "DEAD" or status == "OFFLINE" or status == "UNAVAILABLE"
             or status == "BUSY" or status == "TIMEOUT"
-        if not validString(requestID, 120) or not allowed or not canonicalID then return end
-        ARC.Requests:OnRemoteStatus(identity, session, sequence, requestID, status, canonicalID)
+        if not validString(requestID, 120) or not validString(attemptID, 160)
+            or not validString(leaseToken, 120) or not allowed or not canonicalID then return end
+        ARC.Requests:OnRemoteStatus(identity, session, sequence, requestID, attemptID,
+            leaseToken, status, canonicalID)
     elseif messageType == "USE_CANCEL" then
-        local requestID, targetKey = decoded[6], decoded[7]
-        if not validString(requestID, 120) or not validString(targetKey, 100) then return end
-        ARC.Requests:OnRemoteCancel(identity, session, sequence, requestID, targetKey)
-    elseif messageType == "BUNDLE_REQ" then
-        local bundleID, bundleName, itemID, targetKey = decoded[6], decoded[7], decoded[8], decoded[9]
+        local requestID, attemptID, leaseToken, targetKey =
+            decoded[6], decoded[7], decoded[8], decoded[9]
+        if not validString(requestID, 120) or not validString(attemptID, 160)
+            or not validString(leaseToken, 120) or not validString(targetKey, 100) then return end
+        ARC.Requests:OnRemoteCancel(identity, session, sequence, requestID, attemptID,
+            leaseToken, targetKey)
+    elseif messageType == "USE_SYNC" then
+        local requestID, attemptID, leaseToken, targetKey =
+            decoded[6], decoded[7], decoded[8], decoded[9]
         local canonicalID = ARC.Registry:Canonicalize(decoded[10])
-        local timeoutTenths = decoded[11]
+        local remainingTenths = decoded[11]
+        if not validString(requestID, 120) or not validString(attemptID, 160)
+            or not validString(leaseToken, 120) or type(targetKey) ~= "string"
+            or #targetKey > 100 or not canonicalID
+            or not validInteger(remainingTenths, 0, 300) then return end
+        ARC.Requests:OnRemoteSync(identity, session, sequence, requestID, attemptID,
+            leaseToken, targetKey, canonicalID, remainingTenths / 10)
+    elseif messageType == "USE_END" then
+        local requestID, leaseToken = decoded[6], decoded[7]
+        if not validString(requestID, 120) or not validString(leaseToken, 120) then return end
+        ARC.Requests:OnRemoteEnd(identity, session, sequence, requestID, leaseToken)
+    elseif messageType == "BUNDLE_REQ" then
+        local bundleID, bundleName, itemID, attemptID, leaseToken, targetKey =
+            decoded[6], decoded[7], decoded[8], decoded[9], decoded[10], decoded[11]
+        local canonicalID = ARC.Registry:Canonicalize(decoded[12])
+        local timeoutTenths, order = decoded[13], decoded[14]
         if not validString(bundleID, 120) or not validString(bundleName, 60)
-            or not validString(itemID, 140) or not validString(targetKey, 100)
-            or not canonicalID or not validInteger(timeoutTenths, 30, 300) then return end
+            or not validString(itemID, 140) or not validString(attemptID, 180)
+            or not validString(leaseToken, 120) or not validString(targetKey, 100)
+            or not canonicalID or not validInteger(timeoutTenths, 30, 300)
+            or not validInteger(order, 1, ARC.Constants.MAX_BUNDLE_SPELLS) then return end
         ARC.Bundles:OnRemoteRequest(identity, session, sequence, bundleID, bundleName,
-            itemID, targetKey, canonicalID, timeoutTenths / 10)
+            itemID, attemptID, leaseToken, targetKey, canonicalID,
+            timeoutTenths / 10, order)
     elseif messageType == "BUNDLE_STATUS" then
-        local bundleID, itemID, status = decoded[6], decoded[7], decoded[8]
-        local canonicalID = ARC.Registry:Canonicalize(decoded[9])
+        local bundleID, itemID, attemptID, leaseToken, status =
+            decoded[6], decoded[7], decoded[8], decoded[9], decoded[10]
+        local canonicalID = ARC.Registry:Canonicalize(decoded[11])
         local allowed = status == "ACK" or status == "ACTIVE" or status == "QUEUED"
             or status == "CAST" or status == "DECLINED"
             or status == "DEAD" or status == "OFFLINE" or status == "UNAVAILABLE"
             or status == "BUSY" or status == "TIMEOUT"
         if not validString(bundleID, 120) or not validString(itemID, 140)
+            or not validString(attemptID, 180) or not validString(leaseToken, 120)
             or not allowed or not canonicalID then return end
         ARC.Bundles:OnRemoteStatus(identity, session, sequence, bundleID,
-            itemID, status, canonicalID)
+            itemID, attemptID, leaseToken, status, canonicalID)
     elseif messageType == "BUNDLE_CANCEL" then
-        local itemID, targetKey = decoded[6], decoded[7]
-        if not validString(itemID, 140) or not validString(targetKey, 100) then return end
-        ARC.Bundles:OnRemoteCancel(identity, session, sequence, itemID, targetKey)
+        local itemID, attemptID, leaseToken, targetKey =
+            decoded[6], decoded[7], decoded[8], decoded[9]
+        if not validString(itemID, 140) or not validString(attemptID, 180)
+            or not validString(leaseToken, 120) or not validString(targetKey, 100) then return end
+        ARC.Bundles:OnRemoteCancel(identity, session, sequence, itemID, attemptID,
+            leaseToken, targetKey)
     elseif messageType == "BUNDLE_SYNC" then
-        local bundleID = decoded[6]
-        if not validString(bundleID, 120) then return end
-        ARC.Bundles:OnRemoteSync(identity, session, sequence, bundleID)
+        local bundleID, bundleName, leaseToken, encodedRows =
+            decoded[6], decoded[7], decoded[8], decoded[9]
+        if not validString(bundleID, 120) or not validString(bundleName, 60)
+            or not validString(leaseToken, 120) or type(encodedRows) ~= "table" then return end
+        local rows = {}
+        for index, row in ipairs(encodedRows) do
+            if index > ARC.Constants.MAX_BUNDLE_SPELLS or type(row) ~= "table" then return end
+            local canonicalID = ARC.Registry:Canonicalize(row[4])
+            if not validString(row[1], 140) or not validString(row[2], 180)
+                or not validString(row[3], 100) or not canonicalID
+                or not validInteger(row[5], 30, 300)
+                or not validInteger(row[6], 1, ARC.Constants.MAX_BUNDLE_SPELLS) then return end
+            table.insert(rows, {
+                itemID = row[1],
+                attemptID = row[2],
+                targetKey = row[3],
+                spellID = canonicalID,
+                remaining = row[5] / 10,
+                order = row[6],
+            })
+        end
+        ARC.Bundles:OnRemoteSync(identity, session, sequence, bundleID,
+            bundleName, leaseToken, rows)
+    elseif messageType == "BUNDLE_END" then
+        local bundleID, leaseToken = decoded[6], decoded[7]
+        if not validString(bundleID, 120) or not validString(leaseToken, 120) then return end
+        ARC.Bundles:OnRemoteEnd(identity, session, sequence, bundleID, leaseToken)
     end
 end

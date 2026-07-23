@@ -11,12 +11,20 @@ local function copySpell(canonicalID, value, confidence, now)
     local duration = math.max(0, tonumber(value.duration) or 0)
     local remaining = math.max(0, tonumber(value.remaining) or 0)
     if duration > 0 and remaining > duration + 2 then duration = remaining end
+    local cooldownStartedAt = tonumber(value.cooldownStartedAt)
+    if not cooldownStartedAt and duration > 0 and remaining > 0 then
+        cooldownStartedAt = now - math.max(0, duration - remaining)
+    end
     return {
         spellID = canonicalID,
         known = true,
         readyAt = remaining > 0 and (now + remaining) or 0,
         remaining = remaining,
         duration = duration,
+        cooldownStartedAt = cooldownStartedAt,
+        charges = tonumber(value.charges),
+        maxCharges = tonumber(value.maxCharges),
+        chargeRemaining = math.max(0, tonumber(value.chargeRemaining) or 0),
         target = value.target,
         confidence = confidence,
         lastUpdate = now,
@@ -34,6 +42,9 @@ function State:Changed(reason)
     self.revision = self.revision + 1
     if ARC.Renderer and ARC.Renderer.MarkDirty then
         ARC.Renderer:MarkDirty(reason)
+    end
+    if ARC.UserList and ARC.UserList.initialized and ARC.UserList.frame:IsShown() then
+        ARC.UserList:Refresh()
     end
 end
 
@@ -80,6 +91,8 @@ function State:UpdateLocalCooldown(playerKey, canonicalID, value)
     updated.target = value.target or old.target
     local changed = math.abs((old.readyAt or 0) - updated.readyAt) > 0.25
         or math.abs((old.duration or 0) - updated.duration) > 0.25
+        or old.charges ~= updated.charges
+        or old.maxCharges ~= updated.maxCharges
         or old.target ~= updated.target
     player.spells[canonicalID] = updated
     player.lastSeen = now
@@ -117,6 +130,9 @@ function State:ApplyReport(playerKey, identity, session, sequence, capabilityRev
     player.capabilityRevision = capabilityRevision
     player.lastSeen = now
     player.stale = false
+    if ARC.Automation and ARC.Automation.ClearObservedForPlayer then
+        ARC.Automation:ClearObservedForPlayer(playerKey, replacement)
+    end
     self:Changed("complete report")
     return true
 end
@@ -145,6 +161,9 @@ function State:ApplyCast(playerKey, identity, session, sequence, canonicalID, va
         self.lastEffectiveDuration[canonicalID] = player.spells[canonicalID].duration
     end
     self:Changed("cast report")
+    if ARC.Automation and ARC.Automation.ObserveCast then
+        ARC.Automation:ObserveCast(playerKey, canonicalID)
+    end
     if ARC.Requests and ARC.Requests.initialized then
         ARC.Requests:OnReportedCast(playerKey, canonicalID)
     end
@@ -156,13 +175,19 @@ end
 
 function State:ObserveCast(playerKey, identity, canonicalID, target)
     local player = self.players[playerKey]
-    if player and self.sourceRank[player.source or "UNKNOWN"] >= self.sourceRank.REPORT then return false end
     local entry = ARC.Registry:Get(canonicalID)
     local duration = self.lastEffectiveDuration[canonicalID] or (entry and entry.fallbackCD)
+    if ARC.Automation and ARC.Automation.ObserveCast then
+        ARC.Automation:ObserveCast(playerKey, canonicalID)
+    end
     if not duration or duration <= 0 then return false end
     local now = ARC:Now()
-    player = self:GetOrCreate(playerKey, identity, "OBSERVED")
-    player.source = "OBSERVED"
+    local existingSource = player and player.source
+    player = self:GetOrCreate(playerKey, identity, existingSource or "OBSERVED")
+    if not existingSource
+        or self.sourceRank[existingSource or "UNKNOWN"] < self.sourceRank.REPORT then
+        player.source = "OBSERVED"
+    end
     player.lastSeen = now
     player.spells[canonicalID] = copySpell(canonicalID, {
         duration = duration,
@@ -170,6 +195,12 @@ function State:ObserveCast(playerKey, identity, canonicalID, target)
         target = target,
     }, "OBSERVED", now)
     self:Changed("observed cast")
+    if ARC.Requests and ARC.Requests.initialized then
+        ARC.Requests:OnReportedCast(playerKey, canonicalID)
+    end
+    if ARC.Bundles and ARC.Bundles.initialized then
+        ARC.Bundles:OnReportedCast(playerKey, canonicalID)
+    end
     return true
 end
 

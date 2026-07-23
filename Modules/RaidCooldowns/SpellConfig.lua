@@ -320,15 +320,21 @@ function SpellConfig:Initialize()
 end
 
 function SpellConfig:Show()
+    if not ARC.Roster:IsLocalCoordinator() then
+        ARC:Print("only the party leader, raid leader, or raid assistants can change ARC configuration")
+        return false
+    end
     self:Refresh()
     self.frame:Show()
+    return true
 end
 
 function SpellConfig:Toggle()
     if self.frame:IsShown() then
         self.search:ClearFocus()
         self.frame:Hide()
+        return false
     else
-        self:Show()
+        return self:Show()
     end
 end

@@ -36,36 +36,56 @@ end
 function ARC:Initialize()
     if self.initialized or self.initializing then return end
     self.initializing = true
-    self.Registry:Initialize()
-    ActuallyDB = ActuallyDB or {}
-    local legacyProfileKey = "ascension" .. "Cooldowns"
-    if type(ActuallyDB.raidCooldowns) ~= "table"
-        and type(ActuallyDB[legacyProfileKey]) == "table" then
-        ActuallyDB.raidCooldowns = ActuallyDB[legacyProfileKey]
-    end
-    ActuallyDB.raidCooldowns = copyDefaults(self.Defaults.profile, ActuallyDB.raidCooldowns)
-    ActuallyDB[legacyProfileKey] = nil
-    self.db = { profile = ActuallyDB.raidCooldowns }
-    self.State:Initialize()
-    self.Roster:Initialize()
-    self.Roster:Scan()
-    self.Spellbook:Initialize()
-    self.CooldownReader:Initialize()
-    self.Renderer:Initialize()
-    self.Comms:Initialize()
-    self.Requests:Initialize()
-    self.Bundles:Initialize()
-    self.Spellbook:StartGroupedFallbackScans()
-    self.DebugCommands:RegisterSlashCommands()
+    local ok, reason = pcall(function()
+        self.Registry:Initialize()
+        ActuallyDB = ActuallyDB or {}
+        local legacyProfileKey = "ascension" .. "Cooldowns"
+        if type(ActuallyDB.raidCooldowns) ~= "table"
+            and type(ActuallyDB[legacyProfileKey]) == "table" then
+            ActuallyDB.raidCooldowns = ActuallyDB[legacyProfileKey]
+        end
+        ActuallyDB.raidCooldowns = copyDefaults(self.Defaults.profile, ActuallyDB.raidCooldowns)
+        ActuallyDB[legacyProfileKey] = nil
+        self.db = { profile = ActuallyDB.raidCooldowns }
 
-    self.ticker = CreateFrame("Frame")
-    self.ticker:SetScript("OnUpdate", function(_, elapsed) self.Renderer:OnUpdate(elapsed) end)
-    self.initialized = true
+        -- Build all state and request handlers before opening communications.
+        -- A later optional window failure can no longer leave an empty reporter running.
+        self.State:Initialize()
+        self.Roster:Initialize()
+        self.Roster:Scan()
+        self.Spellbook:Initialize()
+        self.CooldownReader:Initialize()
+        self.Renderer:Initialize()
+        initializeOptional("AlertUI")
+        self.Automation:Initialize()
+        self.Requests:Initialize()
+        self.Bundles:Initialize()
+        self.Comms:Initialize()
+        self.Spellbook:StartGroupedFallbackScans()
+        self.DebugCommands:RegisterSlashCommands()
+
+        self.ticker = CreateFrame("Frame")
+        self.ticker:SetScript("OnUpdate", function(_, elapsed)
+            if ARC.initialized then ARC.Renderer:OnUpdate(elapsed) end
+        end)
+    end)
     self.initializing = false
+    if not ok then
+        self.initialized = false
+        self:Print("failed to initialize safely: " .. tostring(reason))
+        return
+    end
+    self.initialized = true
+    initializeOptional("Commander")
+    initializeOptional("UserList")
     initializeOptional("SpellConfig")
     initializeOptional("BundleConfig")
+    initializeOptional("CommanderConfig")
     initializeOptional("TestUI")
     initializeOptional("SpoofTest")
+    if Actually.CacheTips and Actually.CacheTips.RefreshARCAlertControls then
+        Actually.CacheTips:RefreshARCAlertControls()
+    end
     self:Print("|cffff9f1a========== WORK IN PROGRESS ==========|r")
     self:Print("loaded; /act arc for commands")
     self:Print("|cffff9f1a======================================|r")

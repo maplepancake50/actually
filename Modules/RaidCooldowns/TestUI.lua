@@ -158,6 +158,14 @@ function TestUI:Initialize()
         self:StopMovingOrSizing()
         savePosition(self, profile)
     end)
+    frame:SetScript("OnMouseUp", function(_, button)
+        if button == "RightButton" then
+            ARC:ShowWindowContextMenu(frame.contextMenu, "Actually Raid Cooldowns", function()
+                profile.shown = false
+                frame:Hide()
+            end)
+        end
+    end)
 
     frame.title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     frame.title:SetPoint("TOPLEFT", frame, "TOPLEFT", 8, -8)
@@ -189,6 +197,17 @@ function TestUI:Initialize()
         frame:StopMovingOrSizing()
         savePosition(frame, profile)
     end)
+    frame.dragBar:SetScript("OnMouseUp", function(_, button)
+        if button == "RightButton" then
+            ARC:ShowWindowContextMenu(frame.contextMenu, "Actually Raid Cooldowns", function()
+                profile.shown = false
+                frame:Hide()
+            end)
+        end
+    end)
+
+    frame.contextMenu = CreateFrame("Frame", "ActuallyARCCooldownsContextMenu",
+        UIParent, "UIDropDownMenuTemplate")
 
     frame.resizeGrip = CreateFrame("Button", nil, frame)
     frame.resizeGrip:SetWidth(18)

@@ -22,12 +22,33 @@ function CooldownReader:Read(capability)
     if probableGCD then
         start, duration, remaining = 0, 0, 0
     end
+    local charges, maxCharges, chargeStart, chargeDuration
+    if type(GetSpellCharges) == "function" then
+        local ok, current, maximum, rechargeStart, rechargeDuration = pcall(
+            GetSpellCharges, capability.spellbookID or capability.canonicalID)
+        if ok then
+            charges, maxCharges = tonumber(current), tonumber(maximum)
+            chargeStart, chargeDuration = tonumber(rechargeStart) or 0,
+                tonumber(rechargeDuration) or 0
+        end
+    end
+    local chargeRemaining = math.max(0, chargeStart + chargeDuration - ARC:Now())
+    if maxCharges and maxCharges > 0 then
+        if charges and charges > 0 then
+            start, duration, remaining = 0, 0, 0
+        else
+            start, duration, remaining = chargeStart, chargeDuration, chargeRemaining
+        end
+    end
     return {
         start = start,
         duration = duration,
         remaining = remaining,
         enabled = enabled,
         probableGCD = probableGCD,
+        charges = charges,
+        maxCharges = maxCharges,
+        chargeRemaining = chargeRemaining,
     }
 end
 
@@ -84,7 +105,9 @@ function CooldownReader:OnLocalCast(canonicalID, target)
         if token ~= self.castTokens[canonicalID] then return end
         self:RefreshKnown("cast retry", false)
         local value = self.cooldowns[canonicalID]
-        local realCooldown = value and value.remaining > 0 and value.duration > 2
+        local realCooldown = value and ((value.remaining > 0 and value.duration > 2)
+            or (value.maxCharges and value.maxCharges > 0
+                and value.charges and value.charges < value.maxCharges))
         if realCooldown or index >= #self.retryDelays then
             if realCooldown and ARC.Comms.initialized then
                 ARC.Comms:SendCast(canonicalID, value, target)

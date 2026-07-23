@@ -26,6 +26,10 @@ function SpoofTest:GetDuration()
 end
 
 function SpoofTest:Use(spellID)
+    if not ARC.db.profile.debug then
+        ARC:Print("SpoofTest is disabled; use /arc debug before sending fake state")
+        return false
+    end
     local duration = self:GetDuration()
     local now = ARC:Now()
     local playerKey, identity = ARC.Roster:GetPlayer()
@@ -40,6 +44,7 @@ function SpoofTest:Use(spellID)
         readyAt = now + duration,
         remaining = duration,
         duration = duration,
+        cooldownStartedAt = now,
         confidence = "SPOOF",
         lastUpdate = now,
     }
@@ -50,13 +55,25 @@ function SpoofTest:Use(spellID)
     end
     ARC:Print("SpoofTest used " .. ARC.SpellInfo:ResolveSpellName(spellID)
         .. " (" .. tostring(spellID) .. ") for " .. tostring(duration) .. " sec")
+    self.resetToken = (self.resetToken or 0) + 1
+    local token = self.resetToken
+    ARC:ScheduleTimer(function()
+        if SpoofTest.active and SpoofTest.resetToken == token then
+            SpoofTest:Reset()
+            ARC:Print("SpoofTest auto-reset after 60 seconds")
+        end
+    end, 60)
+    return true
 end
 
-function SpoofTest:Reset()
+function SpoofTest:Reset(silent)
+    if not self.active then return false end
     self.active = false
+    self.resetToken = (self.resetToken or 0) + 1
     ARC.Spellbook:Scan("spoof reset")
     if ARC.Comms.initialized then ARC.Comms:SendState(true, "spoof reset") end
-    ARC:Print("SpoofTest cleared; real spell state restored")
+    if not silent then ARC:Print("SpoofTest cleared; real spell state restored") end
+    return true
 end
 
 function SpoofTest:CreateRow(index)
@@ -132,6 +149,9 @@ function SpoofTest:Initialize()
         self:StopMovingOrSizing()
         local point, _, _, x, y = self:GetPoint(1)
         profile.point, profile.x, profile.y = point, x, y
+    end)
+    frame:SetScript("OnHide", function()
+        if SpoofTest.active then SpoofTest:Reset() end
     end)
 
     frame.title = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")

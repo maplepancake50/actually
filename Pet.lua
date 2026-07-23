@@ -47,8 +47,8 @@ local ANIMATIONS = {
         durations = { 0.45, 0.50, 0.45, 0.50, 0.35, 0.10 },
     },
     snoring = {
-        frames = { 5, 7, 5, 7 },
-        durations = { 0.78, 0.86, 0.82, 0.90 },
+        frames = { 5 },
+        durations = { 1.20 },
         loop = true,
     },
     mercenaryCast = {
@@ -307,7 +307,7 @@ local function RandomSneezeDelay()
 end
 
 local function RandomEmoteDelay()
-    return 9 + math.random() * 9
+    return 36 + math.random() * 24
 end
 
 local function RandomActivityDelay()
@@ -1031,9 +1031,9 @@ end
 
 function Pet:UpdateAnimation(elapsed)
     if not self.animation then
-        self.idleClock = (self.idleClock or 0) + elapsed
-        local phase = math.floor(self.idleClock / 0.65) % 4
-        self:SetSpriteFrame(phase == 1 and 2 or 1)
+        -- Stay on the neutral face between actual animations. Frame 2 is a
+        -- talking pose in the current art and looked like constant idle spam.
+        self:SetSpriteFrame(1)
         return
     end
 
@@ -1120,7 +1120,6 @@ function Pet:Update(elapsed)
     if self.sneezeTimer <= 0 then
         self.sneezeTimer = RandomSneezeDelay()
         self:Play("sneeze")
-        self:ShowBubble("achoo!", 1.2)
     elseif self.activityTimer <= 0 then
         self.activityTimer = RandomActivityDelay()
         self:PlayPeriodicActivity()

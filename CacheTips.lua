@@ -4,6 +4,7 @@ local Addon = Actually
 local CacheTips = {}
 Addon.CacheTips = CacheTips
 local SetBackdrop = Addon.Util.SetBackdrop
+local ROLE_PANEL_TOP = -342
 
 local ROLE_DEFINITIONS = {
     {
@@ -41,7 +42,7 @@ end
 local function CreateRolePanel(root, definition, anchor)
     local panel = CreateFrame("Frame", nil, root)
     panel:SetWidth(292)
-    panel:SetPoint(anchor.point, root, anchor.point, anchor.x or 0, -246)
+    panel:SetPoint(anchor.point, root, anchor.point, anchor.x or 0, ROLE_PANEL_TOP)
     panel:SetPoint(anchor.bottom, root, anchor.bottom, anchor.x or 0, 0)
     SetBackdrop(panel,
         { definition.color[1] * 0.10, definition.color[2] * 0.10, definition.color[3] * 0.10, 0.97 },
@@ -194,8 +195,75 @@ function CacheTips:Create()
         end
     end)
 
+    local arcAlerts = CreateFrame("Frame", nil, root)
+    arcAlerts:SetPoint("TOPLEFT", root, "TOPLEFT", 0, -202)
+    arcAlerts:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, -202)
+    arcAlerts:SetHeight(91)
+    SetBackdrop(arcAlerts, { 0.030, 0.055, 0.075, 0.97 }, { 0.20, 0.72, 0.96, 0.88 })
+
+    local arcTitle = arcAlerts:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    arcTitle:SetPoint("TOPLEFT", arcAlerts, "TOPLEFT", 16, -12)
+    arcTitle:SetText("ARC Alerts")
+    arcTitle:SetTextColor(0.32, 0.86, 1.00)
+
+    local arcDescription = arcAlerts:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    arcDescription:SetPoint("TOPLEFT", arcTitle, "BOTTOMLEFT", 0, -7)
+    arcDescription:SetText("Personal position and size for Actually Raid Cooldown alerts")
+    arcDescription:SetTextColor(0.62, 0.70, 0.80)
+
+    local arcMove = CreateFrame("Button", nil, arcAlerts, "UIPanelButtonTemplate")
+    arcMove:SetWidth(130)
+    arcMove:SetHeight(24)
+    arcMove:SetPoint("TOPRIGHT", arcAlerts, "TOPRIGHT", -330, -25)
+    arcMove:SetText("Preview / Move")
+    arcMove:SetScript("OnClick", function()
+        local arc = Addon.Modules and Addon.Modules.RaidCooldowns
+        if arc and arc.AlertUI and arc.AlertUI.initialized then
+            arc.AlertUI:TogglePositioning()
+        end
+    end)
+    self.arcAlertMoveButton = arcMove
+
+    local arcScaleLabel = arcAlerts:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    arcScaleLabel:SetPoint("TOPRIGHT", arcAlerts, "TOPRIGHT", -132, -14)
+    arcScaleLabel:SetWidth(150)
+    arcScaleLabel:SetJustifyH("CENTER")
+    arcScaleLabel:SetText("Size: 100%")
+    arcScaleLabel:SetTextColor(0.86, 0.90, 0.96)
+    self.arcAlertScaleLabel = arcScaleLabel
+
+    local arcScale = CreateFrame("Slider", "ActuallyARCAlertScaleSlider", arcAlerts,
+        "OptionsSliderTemplate")
+    arcScale:SetWidth(150)
+    arcScale:SetHeight(16)
+    arcScale:SetPoint("TOPRIGHT", arcAlerts, "TOPRIGHT", -132, -39)
+    arcScale:SetMinMaxValues(0.60, 1.80)
+    arcScale:SetValueStep(0.05)
+    _G[arcScale:GetName() .. "Low"]:SetText("60%")
+    _G[arcScale:GetName() .. "High"]:SetText("180%")
+    _G[arcScale:GetName() .. "Text"]:SetText("")
+    arcScale:SetScript("OnValueChanged", function(owner)
+        if CacheTips.refreshingARCAlertControls then return end
+        local arc = Addon.Modules and Addon.Modules.RaidCooldowns
+        if arc and arc.AlertUI and arc.AlertUI.initialized then
+            arc.AlertUI:SetScale(owner:GetValue())
+        end
+    end)
+    self.arcAlertScaleSlider = arcScale
+
+    local arcReset = CreateFrame("Button", nil, arcAlerts, "UIPanelButtonTemplate")
+    arcReset:SetWidth(80)
+    arcReset:SetHeight(24)
+    arcReset:SetPoint("TOPRIGHT", arcAlerts, "TOPRIGHT", -15, -25)
+    arcReset:SetText("Reset")
+    arcReset:SetScript("OnClick", function()
+        local arc = Addon.Modules and Addon.Modules.RaidCooldowns
+        if arc and arc.AlertUI and arc.AlertUI.initialized then arc.AlertUI:Reset() end
+    end)
+    self.arcAlertResetButton = arcReset
+
     local roleHeading = root:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    roleHeading:SetPoint("TOPLEFT", root, "TOPLEFT", 2, -214)
+    roleHeading:SetPoint("TOPLEFT", root, "TOPLEFT", 2, -310)
     roleHeading:SetText("Role Tips")
     roleHeading:SetTextColor(0.82, 0.86, 0.94)
 
@@ -213,6 +281,29 @@ function CacheTips:Create()
 
     self:RefreshArrowToggle()
     self:RefreshFapToggle()
+    self:RefreshARCAlertControls()
+end
+
+function CacheTips:RefreshARCAlertControls()
+    if not self.arcAlertScaleSlider then return end
+    local arc = Addon.Modules and Addon.Modules.RaidCooldowns
+    local ready = arc and arc.AlertUI and arc.AlertUI.initialized and arc.db and arc.db.profile
+    self.refreshingARCAlertControls = true
+    local scale = ready and arc.AlertUI:GetScale() or 1
+    self.arcAlertScaleSlider:SetValue(scale)
+    self.arcAlertScaleLabel:SetText("Size: " .. tostring(math.floor(scale * 100 + 0.5)) .. "%")
+    self.arcAlertMoveButton:SetText(ready and arc.AlertUI:IsPositioning()
+        and "Done Moving" or "Preview / Move")
+    self.refreshingARCAlertControls = false
+    if ready then
+        self.arcAlertScaleSlider:Enable()
+        self.arcAlertMoveButton:Enable()
+        self.arcAlertResetButton:Enable()
+    else
+        self.arcAlertScaleSlider:Disable()
+        self.arcAlertMoveButton:Disable()
+        self.arcAlertResetButton:Disable()
+    end
 end
 
 function CacheTips:RefreshFapToggle()
@@ -250,9 +341,14 @@ function CacheTips:SetVisible(visible)
         self.root:SetPoint("BOTTOMRIGHT", Addon.Board.sectionPanel, "BOTTOMRIGHT", -22, bottom)
         self:RefreshArrowToggle()
         self:RefreshFapToggle()
+        self:RefreshARCAlertControls()
         self.root:Show()
     else
         for _, edit in pairs(self.roleEdits or {}) do edit:ClearFocus() end
+        local arc = Addon.Modules and Addon.Modules.RaidCooldowns
+        if arc and arc.AlertUI and arc.AlertUI.StopPositioning then
+            arc.AlertUI:StopPositioning()
+        end
         self.root:Hide()
     end
 end

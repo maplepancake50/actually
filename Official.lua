@@ -316,10 +316,6 @@ function Official:SetLeader(target)
     if not targetKey then
         return nil, "Usage: /actually leader <player|target|me>"
     end
-    local authority = self:GetAuthority()
-    if authority.owner and not self:IsOwner() then
-        return nil, "Only the actually leader, " .. tostring(authority.owner) .. ", can transfer leadership."
-    end
     self:AdvanceAuthority(function(state)
         state.owner = identity
         state.officers[targetKey] = true
@@ -337,9 +333,6 @@ function Official:ClearLeader()
     end
     local authority = self:GetAuthority()
     local previous = authority.owner
-    if previous and not self:IsOwner() then
-        return nil, "Only the actually leader can clear leadership."
-    end
     if not previous then
         return nil
     end

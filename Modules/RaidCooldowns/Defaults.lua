@@ -30,6 +30,17 @@ ARC.Defaults = {
             sound = true,
             autoFailover = true,
         },
+        automation = {
+            failureMemory = true,
+            spreadAssignments = true,
+            stageAdvancePolicy = "any",
+        },
+        alertUI = {
+            point = "CENTER",
+            x = 0,
+            y = 140,
+            scale = 1,
+        },
         requestUI = {
             point = "CENTER",
             x = 0,
@@ -53,6 +64,21 @@ ARC.Defaults = {
             locked = true,
         },
         cooldownBundles = {},
+        commanderUI = {
+            shown = true,
+            point = "CENTER",
+            x = -330,
+            y = 0,
+            scale = 1,
+            locked = true,
+        },
+        commanderConfigUI = {
+            point = "CENTER",
+            x = 0,
+            y = 0,
+        },
+        commandPlans = {},
+        commanderProgress = {},
         spells = {},
         frames = {
             updateInterval = 0.1,

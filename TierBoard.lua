@@ -2402,20 +2402,9 @@ function Board:Create()
     officialList:SetScript("OnClick", function()
         Board:SwitchList("official", Addon.OFFICIAL_LIST_NAME)
     end)
-    officialList:SetScript("OnEnter", function(self)
+    officialList:SetScript("OnEnter", function()
         officialBadge:SetBackdropBorderColor(1, 0.93, 0.45, 1)
         crownGlow:SetAlpha(0.95)
-        GameTooltip:SetOwner(self, "ANCHOR_TOP")
-        GameTooltip:SetText(Addon.OFFICIAL_LIST_NAME, 1, 0.82, 0.24)
-        GameTooltip:AddLine("View the guild-approved cache utility rankings.", 1, 1, 1, true)
-        local official = Addon.db.lists.official
-        if official.lastModifiedBy then
-            GameTooltip:AddLine("Last changed by " .. official.lastModifiedBy .. ".", 0.55, 0.85, 1, true)
-        end
-        if Addon.Official and Addon.Official:IsOfficer() then
-            GameTooltip:AddLine("Officer editing is enabled for this character.", 0.45, 1, 0.45, true)
-        end
-        GameTooltip:Show()
     end)
     officialList:SetScript("OnLeave", function()
         if Addon:IsOfficialList() then
@@ -2424,7 +2413,6 @@ function Board:Create()
             officialBadge:SetBackdropBorderColor(1, 0.76, 0.18, 1)
         end
         crownGlow:SetAlpha(1)
-        GameTooltip:Hide()
     end)
 
     local headerDivider = frame:CreateTexture(nil, "BACKGROUND")

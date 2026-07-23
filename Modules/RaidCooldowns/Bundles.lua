@@ -50,8 +50,16 @@ function Bundles:Initialize()
     self.nextSyncAt = 0
     self.counter = 0
     self.remoteSequences = {}
-    self:CreateAlert()
-    self:CreateOfficerSummary()
+    local okAlert, alertReason = pcall(self.CreateAlert, self)
+    if not okAlert then
+        self.alert = nil
+        ARC:Print("bundle alert unavailable: " .. tostring(alertReason))
+    end
+    local okSummary, summaryReason = pcall(self.CreateOfficerSummary, self)
+    if not okSummary then
+        self.officerSummary = nil
+        ARC:Print("bundle summary unavailable: " .. tostring(summaryReason))
+    end
     self.initialized = true
 end
 
@@ -68,7 +76,7 @@ function Bundles:NextBundleID()
     return tostring(ARC.Comms.session) .. ":B:" .. tostring(self.counter)
 end
 
-function Bundles:Start(name, spellIDs)
+function Bundles:Start(name, spellIDs, leaseReady, startedCallback)
     if not ARC.Roster:IsLocalCoordinator() then
         ARC:Print("only the party leader, raid leader, or raid assistants can request bundles")
         return false
@@ -84,6 +92,11 @@ function Bundles:Start(name, spellIDs)
     if ARC.Requests.outgoing then
         ARC:Print("cancel the active single cooldown request before starting a bundle")
         return false
+    end
+    if not leaseReady and not ARC.Automation:HasLocalLease() then
+        return ARC.Automation:Acquire(function()
+            Bundles:Start(name, spellIDs, true, startedCallback)
+        end)
     end
 
     local unique, ordered = {}, {}
@@ -109,19 +122,24 @@ function Bundles:Start(name, spellIDs)
         items = {},
         completed = 0,
         failed = 0,
+        leaseToken = ARC.Automation:GetLeaseToken(),
     }
     self.active = bundle
     self.nextSyncAt = 0
+    local planned = ARC.Automation:PlanSpells(ordered)
     for index, spellID in ipairs(ordered) do
         local item = {
             id = bundle.id .. ":" .. tostring(index),
+            order = index,
             spellID = spellID,
             attempted = {},
             timeout = ARC.Requests:GetTimeout(),
             status = "PENDING",
+            attemptCounter = 0,
+            history = {},
         }
         bundle.items[item.id] = item
-        local candidate = ARC.Requests:FindCandidate(spellID, nil, item.attempted)
+        local candidate = planned[index]
         if candidate then
             self:Assign(item, candidate)
         else
@@ -138,6 +156,7 @@ function Bundles:Start(name, spellIDs)
     ARC.Renderer:MarkDirty("bundle started")
     ARC.Renderer:Reconcile()
     refreshConfig()
+    if startedCallback then startedCallback(self.active ~= nil, self.active) end
     return self.active ~= nil
 end
 
@@ -146,19 +165,33 @@ function Bundles:Assign(item, playerKey)
     if not bundle or not item then return false end
     item.targetKey = playerKey
     item.attempted[playerKey] = true
+    item.attemptCounter = (item.attemptCounter or 0) + 1
+    item.attemptID = item.id .. ":A:" .. tostring(item.attemptCounter)
     item.assignedAt = ARC:Now()
-    -- SENT has a short acknowledgement deadline. A QUEUED response clears it;
-    -- the full response timer starts only when the recipient sends ACTIVE.
+    local assignedSpell = ARC.State.players[playerKey]
+        and ARC.State.players[playerKey].spells[item.spellID]
+    item.assignedCharges = assignedSpell and assignedSpell.charges
     item.deadline = item.assignedAt + item.timeout
+    local ahead = 0
+    for _, other in pairs(bundle.items) do
+        if other ~= item and other.targetKey == playerKey
+            and other.status ~= "DONE" and other.status ~= "FAILED" then
+            ahead = ahead + 1
+        end
+    end
+    item.queueDeadline = item.assignedAt + item.timeout * (ahead + 1) + 3
     item.status = "SENT"
+    ARC.Automation:Reserve(item.attemptID, ARC.Roster:GetPlayer(), playerKey,
+        item.spellID, item.queueDeadline + ARC.Constants.BUNDLE_SYNC_TIMEOUT, "bundle")
     ARC.Renderer:MarkDirty("bundle assignment")
     local selfKey, selfIdentity = ARC.Roster:GetPlayer()
     if playerKey == selfKey then
         self:OnRemoteRequest(selfIdentity, ARC.Comms.session, ARC.Comms:NextSequence(),
-            bundle.id, bundle.name, item.id, playerKey, item.spellID, item.timeout)
+            bundle.id, bundle.name, item.id, item.attemptID, bundle.leaseToken,
+            playerKey, item.spellID, item.timeout, item.order)
     else
-        ARC.Comms:SendBundleRequest(bundle.id, bundle.name, item.id, playerKey,
-            item.spellID, item.timeout)
+        ARC.Comms:SendBundleRequest(bundle.id, bundle.name, item.id, item.attemptID,
+            bundle.leaseToken, playerKey, item.spellID, item.timeout, item.order)
     end
     return true
 end
@@ -167,19 +200,31 @@ function Bundles:CancelAssignment(item)
     if not item or not item.targetKey then return end
     local selfKey = ARC.Roster:GetPlayer()
     if item.targetKey == selfKey then
-        if self.incoming[item.id] then self:RemoveIncoming(item.id) end
+        if self.incoming[item.id]
+            and self.incoming[item.id].attemptID == item.attemptID then
+            self:RemoveIncoming(item.id)
+        end
     else
-        ARC.Comms:SendBundleCancel(item.id, item.targetKey)
+        local bundle = self.active
+        ARC.Comms:SendBundleCancel(item.id, item.attemptID,
+            bundle and bundle.leaseToken, item.targetKey)
     end
+    ARC.Automation:Release(item.attemptID)
 end
 
 function Bundles:Failover(item, reason)
     local bundle = self.active
     if not bundle or not item or item.status == "DONE" or item.status == "FAILED" then return end
+    local oldTarget = item.targetKey
+    item.history[oldTarget] = {
+        attemptID = item.attemptID,
+        expiresAt = ARC:Now() + ARC.Constants.LATE_CAST_GRACE,
+    }
     self:CancelAssignment(item)
+    ARC.Automation:RecordFailure(oldTarget, item.spellID, reason)
     local candidate = ARC.Requests:FindCandidate(item.spellID, nil, item.attempted)
     if candidate and ARC.db.profile.requests.autoFailover ~= false then
-        ARC:Print(bundle.name .. ": " .. shortName(ARC.State.players[item.targetKey])
+        ARC:Print(bundle.name .. ": " .. shortName(ARC.State.players[oldTarget])
             .. " skipped for " .. ARC.SpellInfo:ResolveSpellName(item.spellID)
             .. " (" .. tostring(reason) .. ")")
         self:Assign(item, candidate)
@@ -193,19 +238,21 @@ function Bundles:Failover(item, reason)
     end
 end
 
-function Bundles:Complete(item, source)
+function Bundles:Complete(item, source, playerKey)
     local bundle = self.active
     if not bundle or not item or item.status == "DONE" or item.status == "FAILED" then
         return false
     end
     -- Observed cooldowns may complete a queued item before its prompt appears.
     -- Remove that assignment from the recipient's queue as well.
+    item.completedBy = playerKey or item.targetKey
     self:CancelAssignment(item)
+    ARC.Automation:RecordSuccess(item.completedBy, item.spellID)
     item.status = "DONE"
     item.deadline = nil
     bundle.completed = bundle.completed + 1
     ARC.Renderer:MarkDirty("bundle item complete")
-    ARC:Print(bundle.name .. ": " .. shortName(ARC.State.players[item.targetKey])
+    ARC:Print(bundle.name .. ": " .. shortName(ARC.State.players[item.completedBy or item.targetKey])
         .. " used " .. ARC.SpellInfo:ResolveSpellName(item.spellID)
         .. (source and " (" .. tostring(source) .. ")" or ""))
     self:CheckFinished()
@@ -220,6 +267,10 @@ function Bundles:CheckFinished()
     end
     ARC:Print("bundle " .. bundle.name .. " finished: "
         .. tostring(bundle.completed) .. " used, " .. tostring(bundle.failed) .. " failed")
+    if ARC.Commander and ARC.Commander.OnBundleFinished then
+        ARC.Commander:OnBundleFinished(bundle)
+    end
+    ARC.Comms:SendBundleEnd(bundle.id, bundle.leaseToken)
     self.active = nil
     self.nextSyncAt = nil
     ARC.Renderer:MarkDirty("bundle complete")
@@ -227,15 +278,17 @@ function Bundles:CheckFinished()
     refreshConfig()
 end
 
-function Bundles:CancelActive(reason)
+function Bundles:CancelActive(reason, leaseLost)
     local bundle = self.active
     if not bundle then return false end
     local selfKey = ARC.Roster:GetPlayer()
     for _, item in pairs(bundle.items) do
         if item.status ~= "DONE" and item.status ~= "FAILED"
             and item.targetKey ~= selfKey then
-            ARC.Comms:SendBundleCancel(item.id, item.targetKey)
+            ARC.Comms:SendBundleCancel(item.id, item.attemptID,
+                bundle.leaseToken, item.targetKey)
         end
+        ARC.Automation:Release(item.attemptID)
     end
     if self.incomingBundleID == bundle.id then
         self.incoming = {}
@@ -244,14 +297,19 @@ function Bundles:CancelActive(reason)
         self.incomingBundleID = nil
         self.incomingRequesterKey = nil
         self.incomingLastSyncAt = nil
-        self.alert:Hide()
+        if self.alert then self.alert:Hide() end
+    end
+    if ARC.Commander and ARC.Commander.OnBundleCancelled then
+        ARC.Commander:OnBundleCancelled(bundle)
     end
     self.active = nil
     self.nextSyncAt = nil
+    ARC.Comms:SendBundleEnd(bundle.id, bundle.leaseToken)
     ARC:Print("bundle cancelled" .. (reason and ": " .. tostring(reason) or ""))
     ARC.Renderer:MarkDirty("bundle cancelled")
     ARC.Renderer:Reconcile()
     refreshConfig()
+    if not leaseLost then ARC.Automation:ReleaseLease() end
     return true
 end
 
@@ -269,11 +327,12 @@ function Bundles:SendStatus(incoming, status)
     local selfKey, selfIdentity = ARC.Roster:GetPlayer()
     if incoming.requesterKey == selfKey then
         self:OnRemoteStatus(selfIdentity, ARC.Comms.session, ARC.Comms:NextSequence(),
-            incoming.bundleID, incoming.itemID, status, incoming.spellID)
+            incoming.bundleID, incoming.itemID, incoming.attemptID,
+            incoming.leaseToken, status, incoming.spellID)
         return true
     end
     return ARC.Comms:SendBundleStatus(incoming.bundleID, incoming.itemID,
-        status, incoming.spellID)
+        incoming.attemptID, incoming.leaseToken, status, incoming.spellID)
 end
 
 function Bundles:RemoveFromIncomingOrder(itemID)
@@ -322,7 +381,7 @@ function Bundles:ActivateNext()
                 self.incomingRequesterKey = nil
                 self.incomingLastSyncAt = nil
             end
-            self.alert:Hide()
+            if self.alert then self.alert:Hide() end
             return false
         end
         if self:ActivateIncoming(nextID, true) then return true end
@@ -330,21 +389,23 @@ function Bundles:ActivateNext()
 end
 
 function Bundles:RemoveIncoming(itemID, suppressPromotion)
+    local removed = self.incoming[itemID]
     local wasActive = self.activeIncomingID == itemID
     self.incoming[itemID] = nil
+    if removed then ARC.Automation:Release(removed.attemptID) end
     self:RemoveFromIncomingOrder(itemID)
     if wasActive then self.activeIncomingID = nil end
     if activeIncomingCount(self.incoming) == 0 then
         self.incomingBundleID = nil
         self.incomingRequesterKey = nil
         self.incomingLastSyncAt = nil
-        self.alert:Hide()
+        if self.alert then self.alert:Hide() end
     elseif wasActive and not suppressPromotion then
         self:ActivateNext()
     elseif self.activeIncomingID then
         self:RefreshAlert(false)
     else
-        self.alert:Hide()
+        if self.alert then self.alert:Hide() end
     end
     return wasActive
 end
@@ -366,35 +427,50 @@ function Bundles:RejectAll(status)
     self.incomingBundleID = nil
     self.incomingRequesterKey = nil
     self.incomingLastSyncAt = nil
-    self.alert:Hide()
+    if self.alert then self.alert:Hide() end
     for _, incoming in ipairs(pending) do
+        ARC.Automation:Release(incoming.attemptID)
         self:SendStatus(incoming, status or "DECLINED")
     end
 end
 
 function Bundles:OnRemoteRequest(requester, session, sequence, bundleID, bundleName,
-    itemID, targetKey, spellID, timeout)
-    if not self:AcceptSequence(requester, session, sequence) then return end
-    if not ARC.Roster:IsCoordinator(requester) then
+    itemID, attemptID, leaseToken, targetKey, spellID, timeout, order, sequenceAccepted)
+    if not sequenceAccepted and not self:AcceptSequence(requester, session, sequence) then return end
+    if not ARC.Automation:AcceptLease(requester, leaseToken) then
         ARC:Debug("rejected bundle request from non-coordinator " .. tostring(requester.name))
         return
     end
+    ARC.Automation:Reserve(attemptID, requester.key, targetKey, spellID,
+        ARC:Now() + timeout + ARC.Constants.BUNDLE_SYNC_TIMEOUT, "bundle")
     local selfKey = ARC.Roster:GetPlayer()
     if targetKey ~= selfKey then return end
+    local existing = self.incoming[itemID]
+    if existing and existing.attemptID == attemptID then
+        existing.lastSyncAt = ARC:Now()
+        self.incomingLastSyncAt = ARC:Now()
+        self:SendStatus(existing, existing.state == "ACTIVE" and "ACTIVE" or "QUEUED")
+        return
+    elseif existing then
+        self:RemoveIncoming(itemID)
+    end
     if ARC.Requests.incoming
         or (self.incomingBundleID and (self.incomingBundleID ~= bundleID
             or self.incomingRequesterKey ~= requester.key)) then
-        ARC.Comms:SendBundleStatus(bundleID, itemID, "BUSY", spellID)
+        ARC.Comms:SendBundleStatus(bundleID, itemID, attemptID, leaseToken,
+            "BUSY", spellID)
         return
     end
-    if activeIncomingCount(self.incoming) >= ARC.Constants.MAX_BUNDLE_SPELLS then
-        ARC.Comms:SendBundleStatus(bundleID, itemID, "BUSY", spellID)
+    if activeIncomingCount(self.incoming) >= ARC.Constants.MAX_BUNDLE_SPELLS
+        or not self.alert then
+        ARC.Comms:SendBundleStatus(bundleID, itemID, attemptID, leaseToken,
+            "BUSY", spellID)
         return
     end
     local eligible, reason = ARC.Requests:IsEligible(selfKey, spellID)
     if not eligible then
         local player = ARC.State.players[selfKey]
-        ARC.Comms:SendBundleStatus(bundleID, itemID,
+        ARC.Comms:SendBundleStatus(bundleID, itemID, attemptID, leaseToken,
             player and player.dead and "DEAD" or "UNAVAILABLE", spellID)
         ARC:Debug("declined bundle item locally: " .. tostring(reason))
         return
@@ -407,15 +483,23 @@ function Bundles:OnRemoteRequest(requester, session, sequence, bundleID, bundleN
         bundleID = bundleID,
         bundleName = bundleName,
         itemID = itemID,
+        attemptID = attemptID,
+        leaseToken = leaseToken,
         requesterKey = requester.key,
         requesterName = shortName(requester),
         spellID = spellID,
         timeout = math.max(3, math.min(timeout, 30)),
+        order = tonumber(order) or 1,
         state = "QUEUED",
+        lastSyncAt = ARC:Now(),
     }
     self.incoming[itemID] = incoming
     self.incomingOrder = self.incomingOrder or {}
     table.insert(self.incomingOrder, itemID)
+    table.sort(self.incomingOrder, function(leftID, rightID)
+        local left, right = self.incoming[leftID], self.incoming[rightID]
+        return (left and left.order or 1) < (right and right.order or 1)
+    end)
     if not self.activeIncomingID then
         self:ActivateIncoming(itemID, true)
     else
@@ -423,40 +507,91 @@ function Bundles:OnRemoteRequest(requester, session, sequence, bundleID, bundleN
     end
 end
 
-function Bundles:OnRemoteStatus(identity, session, sequence, bundleID, itemID, status, spellID)
+function Bundles:OnRemoteStatus(identity, session, sequence, bundleID, itemID,
+    attemptID, leaseToken, status, spellID)
     if not self:AcceptSequence(identity, session, sequence) then return end
     local bundle = self.active
     local item = bundle and bundle.id == bundleID and bundle.items[itemID]
-    if not item or item.targetKey ~= identity.key or item.spellID ~= spellID then return end
+    if not item or item.spellID ~= spellID or bundle.leaseToken ~= leaseToken then return end
+    local prior = item.history and item.history[identity.key]
+    local current = item.targetKey == identity.key and item.attemptID == attemptID
+    local oldCast = status == "CAST" and prior and prior.attemptID == attemptID
+        and (prior.expiresAt or 0) >= ARC:Now()
+    if not current and not oldCast then return end
     if item.status == "DONE" or item.status == "FAILED" then return end
     if status == "QUEUED" then
         item.status = "QUEUED"
-        item.deadline = nil
         ARC.Renderer:MarkDirty("bundle queued")
     elseif status == "ACTIVE" or status == "ACK" then
+        local wasActive = item.status == "ACTIVE"
         item.status = "ACTIVE"
-        item.deadline = ARC:Now() + item.timeout
+        if not wasActive then item.deadline = ARC:Now() + item.timeout end
         ARC.Renderer:MarkDirty("bundle prompt active")
     elseif status == "CAST" then
-        self:Complete(item, "confirmed")
+        self:Complete(item, "confirmed", identity.key)
     elseif FAILURE_STATUSES[status] then
         self:Failover(item, string.lower(status))
     end
 end
 
-function Bundles:OnRemoteCancel(requester, session, sequence, itemID, targetKey)
+function Bundles:OnRemoteCancel(requester, session, sequence, itemID, attemptID,
+    leaseToken, targetKey)
     if not self:AcceptSequence(requester, session, sequence) then return end
-    if not ARC.Roster:IsCoordinator(requester) then return end
+    if not ARC.Automation:AcceptLease(requester, leaseToken) then return end
+    ARC.Automation:Release(attemptID)
     local selfKey = ARC.Roster:GetPlayer()
-    if targetKey == selfKey and self.incoming[itemID] then self:RemoveIncoming(itemID) end
+    if targetKey == selfKey and self.incoming[itemID]
+        and self.incoming[itemID].attemptID == attemptID then self:RemoveIncoming(itemID) end
 end
 
-function Bundles:OnRemoteSync(requester, session, sequence, bundleID)
+function Bundles:OnRemoteSync(requester, session, sequence, bundleID, bundleName,
+    leaseToken, rows)
     if not self:AcceptSequence(requester, session, sequence) then return end
-    if not ARC.Roster:IsCoordinator(requester) then return end
-    if self.incomingBundleID == bundleID and self.incomingRequesterKey == requester.key then
-        self.incomingLastSyncAt = ARC:Now()
+    if not ARC.Automation:AcceptLease(requester, leaseToken) then return end
+    local now = ARC:Now()
+    local selfKey = ARC.Roster:GetPlayer()
+    local validSelf = {}
+    local validAttempts = {}
+    for _, row in ipairs(rows or {}) do
+        local itemID, attemptID, targetKey, spellID, remaining =
+            row.itemID, row.attemptID, row.targetKey, row.spellID, row.remaining
+        ARC.Automation:Reserve(attemptID, requester.key, targetKey, spellID,
+            now + remaining + ARC.Constants.BUNDLE_SYNC_TIMEOUT, "bundle")
+        validAttempts[attemptID] = true
+        if targetKey == selfKey and remaining > 0 then
+            validSelf[itemID] = attemptID
+            local incoming = self.incoming[itemID]
+            if incoming and incoming.attemptID == attemptID then
+                incoming.lastSyncAt = now
+                self:SendStatus(incoming,
+                    incoming.state == "ACTIVE" and "ACTIVE" or "QUEUED")
+            else
+                self:OnRemoteRequest(requester, session, sequence, bundleID, bundleName,
+                    itemID, attemptID, leaseToken, targetKey, spellID, remaining,
+                    row.order, true)
+            end
+        end
     end
+    ARC.Automation:ReleasePrefix(bundleID .. ":", requester.key, validAttempts)
+    local remove = {}
+    for itemID, incoming in pairs(self.incoming) do
+        if incoming.bundleID == bundleID and incoming.requesterKey == requester.key
+            and validSelf[itemID] ~= incoming.attemptID then
+            table.insert(remove, itemID)
+        end
+    end
+    for _, itemID in ipairs(remove) do self:RemoveIncoming(itemID) end
+    if next(validSelf) then
+        self.incomingLastSyncAt = now
+    end
+end
+
+function Bundles:OnRemoteEnd(requester, session, sequence, bundleID, leaseToken)
+    if not self:AcceptSequence(requester, session, sequence) then return end
+    if not ARC.Automation:AcceptLease(requester, leaseToken) then return end
+    ARC.Automation:ReleasePrefix(bundleID .. ":", requester.key)
+    if self.incomingBundleID == bundleID
+        and self.incomingRequesterKey == requester.key then self:RejectAll("UNAVAILABLE") end
 end
 
 function Bundles:OnLocalCast(spellID)
@@ -476,7 +611,17 @@ end
 
 function Bundles:OnReportedCast(playerKey, spellID)
     local item = self:GetAssignment(playerKey, spellID)
-    if item then self:Complete(item, "observed") end
+    if item then self:Complete(item, "observed", playerKey) return end
+    local bundle = self.active
+    for _, candidate in pairs(bundle and bundle.items or {}) do
+        local prior = candidate.history and candidate.history[playerKey]
+        if candidate.spellID == spellID and candidate.status ~= "DONE"
+            and candidate.status ~= "FAILED" and prior
+            and (prior.expiresAt or 0) >= ARC:Now() then
+            self:Complete(candidate, "late fallback cast", playerKey)
+            return
+        end
+    end
 end
 
 function Bundles:OnRosterChanged()
@@ -492,6 +637,25 @@ function Bundles:OnPlayerDeath()
     if activeIncomingCount(self.incoming) > 0 then self:RejectAll("DEAD") end
 end
 
+function Bundles:BuildSyncRows()
+    local rows = {}
+    local bundle = self.active
+    for _, item in pairs(bundle and bundle.items or {}) do
+        if item.status ~= "DONE" and item.status ~= "FAILED" and item.targetKey then
+            table.insert(rows, {
+                item.id,
+                item.attemptID,
+                item.targetKey,
+                item.spellID,
+                math.floor(item.timeout * 10 + 0.5),
+                item.order or 1,
+            })
+        end
+    end
+    table.sort(rows, function(left, right) return (left[6] or 1) < (right[6] or 1) end)
+    return rows
+end
+
 function Bundles:OnUpdate(now)
     if not self.initialized then return end
     local selfKey = ARC.Roster:GetPlayer()
@@ -501,7 +665,8 @@ function Bundles:OnUpdate(now)
             self:CancelActive("coordinator authority lost")
         else
             if now >= (self.nextSyncAt or 0) then
-                ARC.Comms:SendBundleSync(bundle.id)
+                ARC.Comms:SendBundleSync(bundle.id, bundle.name, bundle.leaseToken,
+                    self:BuildSyncRows())
                 self.nextSyncAt = now + ARC.Constants.BUNDLE_SYNC_INTERVAL
             end
             if self.incomingBundleID == bundle.id and self.incomingRequesterKey == selfKey then
@@ -521,10 +686,13 @@ function Bundles:OnUpdate(now)
                         self:Failover(item, "stale report")
                     elseif not target.spells or not target.spells[item.spellID] then
                         self:Failover(item, "spell unavailable")
-                    elseif (target.spells[item.spellID].readyAt or 0) > now + 0.5 then
+                    elseif ARC.Automation:WasUsedAfterAssignment(target.spells[item.spellID],
+                        item.assignedAt, item.assignedCharges) then
                         self:Complete(item, "cooldown detected")
-                    elseif item.status ~= "QUEUED" and item.deadline
-                        and now >= item.deadline then
+                    elseif item.status == "QUEUED" and item.queueDeadline
+                        and now >= item.queueDeadline then
+                        self:Failover(item, "queue timeout")
+                    elseif item.status ~= "QUEUED" and item.deadline and now >= item.deadline then
                         self:Failover(item, "timeout")
                     end
                 end
@@ -557,55 +725,12 @@ function Bundles:OnUpdate(now)
 end
 
 function Bundles:CreateAlert()
-    local profile = ARC.db.profile.bundleAlertUI
-    local frame = CreateFrame("Frame", "ActuallyARCBundleAlertFrame", UIParent)
-    frame:SetWidth(430)
-    frame:SetHeight(158)
-    frame:SetPoint(profile.point or "CENTER", UIParent, profile.point or "CENTER",
-        profile.x or 0, profile.y or 150)
-    frame:SetFrameStrata("FULLSCREEN_DIALOG")
-    frame:SetMovable(true)
-    frame:SetClampedToScreen(true)
-    frame:EnableMouse(true)
-    frame:RegisterForDrag("LeftButton")
-    setBackdrop(frame, { 0.025, 0.030, 0.045, 0.99 }, { 0.72, 0.30, 1.00, 1 })
-    frame:SetScript("OnDragStart", function(self) self:StartMoving() end)
-    frame:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        local point, _, _, x, y = self:GetPoint(1)
-        profile.point, profile.x, profile.y = point, x, y
-    end)
-
-    frame.heading = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    frame.heading:SetPoint("TOP", frame, "TOP", 0, -14)
-    frame.heading:SetText("ARC COOLDOWN BUNDLE - " .. ARC.Constants.WIP_TEXT)
-    frame.heading:SetTextColor(0.78, 0.46, 1.00)
-
-    frame.message = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    frame.message:SetPoint("TOP", frame.heading, "BOTTOM", 0, -7)
-
-    frame.spells = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-    frame.spells:SetPoint("TOPLEFT", frame, "TOPLEFT", 20, -61)
-    frame.spells:SetPoint("RIGHT", frame, "RIGHT", -20, 0)
-    frame.spells:SetJustifyH("CENTER")
-    frame.spells:SetJustifyV("TOP")
-
-    frame.timer = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    frame.timer:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 14, 16)
-    frame.timer:SetTextColor(1.00, 0.72, 0.20)
-
-    frame.decline = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    frame.decline:SetWidth(100)
-    frame.decline:SetHeight(22)
-    frame.decline:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 9)
-    frame.decline:SetText("Can't use")
+    local frame = ARC.AlertUI:CreateAlertFrame("ActuallyARCBundleAlertFrame")
     frame.decline:SetScript("OnClick", function()
         if Bundles.activeIncomingID then
             Bundles:RejectIncoming(Bundles.activeIncomingID, "DECLINED")
         end
     end)
-
-    frame:Hide()
     self.alert = frame
 end
 
@@ -733,15 +858,17 @@ function Bundles:RefreshAlert(playSound)
     local incoming = self.activeIncomingID and self.incoming[self.activeIncomingID]
     if not incoming then self.alert:Hide() return end
     local queued = math.max(0, activeIncomingCount(self.incoming) - 1)
-    self.alert.message:SetText(tostring(incoming.requesterName)
-        .. " requests: " .. tostring(incoming.bundleName))
-    local line = "USE " .. string.upper(ARC.SpellInfo:ResolveSpellName(incoming.spellID)) .. "!"
+    self.alert.icon:SetTexture(ARC.SpellInfo:ResolveSpellIcon(incoming.spellID))
+    self.alert.heading:SetText("USE "
+        .. string.upper(ARC.SpellInfo:ResolveSpellName(incoming.spellID)) .. " NOW")
+    local line = tostring(incoming.requesterName) .. " - " .. tostring(incoming.bundleName)
     if queued > 0 then
-        line = line .. "\n|cffaaaaaa" .. tostring(queued)
+        line = line .. "  |cffaaaaaa(" .. tostring(queued)
             .. (queued == 1 and " more cooldown queued|r" or " more cooldowns queued|r")
+            .. ")"
     end
-    self.alert.spells:SetText(line)
-    self.alert:SetHeight(158)
+    self.alert.detail:SetText(line)
+    self.alert.arcDeadline = incoming.deadline
     self:UpdateAlert(ARC:Now())
     self.alert:Show()
 
@@ -751,9 +878,11 @@ end
 function Bundles:UpdateAlert(now)
     local incoming = self.activeIncomingID and self.incoming[self.activeIncomingID]
     if incoming and incoming.deadline then
-        self.alert.timer:SetText("Respond within "
-            .. tostring(math.max(0, math.ceil(incoming.deadline - now))) .. " sec")
+        self.alert.arcDeadline = incoming.deadline
+        self.alert.timer:SetText(tostring(math.max(0, math.ceil(incoming.deadline - now)))
+            .. " SEC TO RESPOND")
     else
+        self.alert.arcDeadline = nil
         self.alert.timer:SetText("")
     end
 end

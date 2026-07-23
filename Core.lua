@@ -95,6 +95,9 @@ local defaults = {
         enabled = true,
         cooldownUntil = 0,
     },
+    raidCC = {
+        enabled = false,
+    },
     cacheTips = {
         healer = "",
         dps = "",

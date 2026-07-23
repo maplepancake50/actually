@@ -648,10 +648,19 @@ function BundleConfig:Initialize()
 end
 
 function BundleConfig:Show()
+    if not ARC.Roster:IsLocalCoordinator() then
+        ARC:Print("only the party leader, raid leader, or raid assistants can change ARC configuration")
+        return false
+    end
     self:Refresh()
     self.frame:Show()
+    return true
 end
 
 function BundleConfig:Toggle()
-    if self.frame:IsShown() then self.frame:Hide() else self:Show() end
+    if self.frame:IsShown() then
+        self.frame:Hide()
+        return false
+    end
+    return self:Show()
 end
