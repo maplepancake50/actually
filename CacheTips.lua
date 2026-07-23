@@ -270,7 +270,7 @@ function CacheTips:Create()
     raidCCCheckbox:SetScript("OnEnter", function(owner)
         GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
         GameTooltip:SetText("Better Healer Nameplates", 1, 1, 1)
-        GameTooltip:AddLine("While in a raid or battleground, displays raid members as names only. Cyclone shows a green arrow; Shadowfury shows a purple arrow.", nil, nil, nil, true)
+        GameTooltip:AddLine("While in a raid or battleground, displays raid members as names only. Cyclone and Rejuvenation show green arrows; Shadowfury and Wild Growth show purple arrows.", nil, nil, nil, true)
         if Addon.RaidCC and Addon.RaidCC.GetRuntimeStatus then
             local state, status = Addon.RaidCC:GetRuntimeStatus()
             local r, g, b = 1, 0.82, 0

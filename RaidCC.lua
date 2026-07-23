@@ -24,13 +24,19 @@ local LITE_ICON_FIELD = "liteQuestIcon"
 
 local CC_CYCLONE = "cyclone"
 local CC_SHADOWFURY = "shadowfury"
-local CC_ARROW_COLORS = {
+local AURA_REJUVENATION = "rejuvenation"
+local AURA_WILD_GROWTH = "wild-growth"
+local AURA_ARROW_COLORS = {
     [CC_CYCLONE] = { 0.15, 1.00, 0.25 },
     [CC_SHADOWFURY] = { 0.72, 0.20, 1.00 },
+    [AURA_REJUVENATION] = { 0.15, 1.00, 0.25 },
+    [AURA_WILD_GROWTH] = { 0.72, 0.20, 1.00 },
 }
-local CC_PRIORITY = {
-    [CC_CYCLONE] = 2,
-    [CC_SHADOWFURY] = 1,
+local AURA_PRIORITY = {
+    [CC_CYCLONE] = 4,
+    [CC_SHADOWFURY] = 3,
+    [AURA_WILD_GROWTH] = 2,
+    [AURA_REJUVENATION] = 1,
 }
 
 -- Match TurboPlates' own conflict audit. Ascension_NamePlates is represented
@@ -48,6 +54,8 @@ local trackedSpellIDs = {
     [30414] = CC_SHADOWFURY, -- Shadowfury (rank 3)
     [47846] = CC_SHADOWFURY, -- Shadowfury (rank 4)
     [47847] = CC_SHADOWFURY, -- Shadowfury (rank 5)
+    [26892] = AURA_REJUVENATION, -- Rejuvenation
+    [52348] = AURA_WILD_GROWTH, -- Wild Growth
 }
 
 RaidCC.trackedSpellIDs = trackedSpellIDs
@@ -222,7 +230,7 @@ function RaidCC:GetRuntimeStatus()
     end
 
     if self.runtimeActive then
-        return "active", "Active: raid members are name-only and tracked CC displays an arrow."
+        return "active", "Active: raid members are name-only and tracked effects display coloured arrows."
     end
 
     return "waiting", "Preparing the raid nameplate override."
@@ -553,7 +561,7 @@ function RaidCC:RemoveOverride(nameplate, plateIsBeingRemoved, reason)
     end
 end
 
-function RaidCC:HasTrackedCC(unit)
+function RaidCC:FindTrackedAura(unit)
     if not unit or not UnitExists(unit) then
         return false
     end
@@ -561,13 +569,9 @@ function RaidCC:HasTrackedCC(unit)
     local bestName
     local bestSpellID
     local bestPriority = 0
-    for index = 1, 40 do
-        local name, _, _, _, _, _, _, _, _, _, spellID = UnitDebuff(unit, index)
-        if not name then
-            break
-        end
+    local function ConsiderAura(name, spellID)
         local kind = (spellID and trackedSpellIDs[spellID]) or self.trackedSpellNames[name]
-        local priority = kind and CC_PRIORITY[kind] or 0
+        local priority = kind and AURA_PRIORITY[kind] or 0
         if priority > bestPriority then
             bestKind = kind
             bestName = name
@@ -575,6 +579,27 @@ function RaidCC:HasTrackedCC(unit)
             bestPriority = priority
         end
     end
+
+    if UnitDebuff then
+        for index = 1, 40 do
+            local name, _, _, _, _, _, _, _, _, _, spellID = UnitDebuff(unit, index)
+            if not name then
+                break
+            end
+            ConsiderAura(name, spellID)
+        end
+    end
+
+    if UnitBuff then
+        for index = 1, 40 do
+            local name, _, _, _, _, _, _, _, _, _, spellID = UnitBuff(unit, index)
+            if not name then
+                break
+            end
+            ConsiderAura(name, spellID)
+        end
+    end
+
     if bestKind then
         return true, bestKind, bestName, bestSpellID
     end
@@ -587,12 +612,12 @@ function RaidCC:UpdateArrow(state)
         and UnitExists(state.unit)
         and UnitGUID(state.unit) == state.guid
         and self.raidGUIDs[state.guid] == true
-    local hasCC, kind, spellName, spellID
+    local hasAura, kind, spellName, spellID
     if valid then
-        hasCC, kind, spellName, spellID = self:HasTrackedCC(state.unit)
+        hasAura, kind, spellName, spellID = self:FindTrackedAura(state.unit)
     end
-    if hasCC then
-        local color = CC_ARROW_COLORS[kind] or { 1, 1, 1 }
+    if hasAura then
+        local color = AURA_ARROW_COLORS[kind] or { 1, 1, 1 }
         state.overlay.arrow:SetVertexColor(color[1], color[2], color[3], 1)
         state.overlay.arrowShadow:Show()
         state.overlay.arrow:Show()
@@ -600,11 +625,11 @@ function RaidCC:UpdateArrow(state)
         state.overlay.arrow:Hide()
         state.overlay.arrowShadow:Hide()
     end
-    local shown = hasCC and true or false
+    local shown = hasAura and true or false
     if state.arrowShown ~= shown or state.arrowKind ~= kind then
         state.arrowShown = shown
         state.arrowKind = kind
-        self:Debug("CC arrow " .. (shown and ("shown:" .. tostring(kind)) or "hidden")
+        self:Debug("tracked aura arrow " .. (shown and ("shown:" .. tostring(kind)) or "hidden")
             .. " " .. UnitDescription(state.unit)
             .. (shown and (" spell=" .. tostring(spellName)
                 .. " spellID=" .. tostring(spellID)) or ""))
@@ -955,6 +980,8 @@ function RaidCC:BuildTrackedSpellNames()
     -- Ascension may remap IDs, but stable English names still qualify.
     self.trackedSpellNames.Cyclone = CC_CYCLONE
     self.trackedSpellNames.Shadowfury = CC_SHADOWFURY
+    self.trackedSpellNames.Rejuvenation = AURA_REJUVENATION
+    self.trackedSpellNames["Wild Growth"] = AURA_WILD_GROWTH
 end
 
 function RaidCC:Initialize()
