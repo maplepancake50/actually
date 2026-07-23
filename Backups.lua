@@ -110,6 +110,14 @@ end
 
 function Backups:RestoreRecord(record)
     if type(record) ~= "table" then return false end
+    if not Addon.Official or not Addon.Official:IsOwner() then
+        Addon:Print("Only the actually leader can restore official data.")
+        return false
+    end
+    if Addon.Sync and Addon.Sync.IsOfficialEditReady and not Addon.Sync:IsOfficialEditReady() then
+        Addon:Print("Wait for official-list synchronization to finish before restoring a backup.")
+        return false
+    end
     local incoming = self:Validate(record.payload)
     if not incoming then
         Addon:Print("This recovery snapshot is damaged or incompatible.")
@@ -121,46 +129,32 @@ function Backups:RestoreRecord(record)
     self:Capture("pre-restore", false, true)
 
     local restoredAt = time()
-    local restorer = UnitName("player") or "Recovery"
-    local recoveryClock = restoredAt * 1000
+    local restorer = Addon.Official:GetPlayerIdentity()
     local official = Addon.db.lists.official
-    local recoveryOperations = {}
-    local function RecoveryOperation(kind, fields)
-        recoveryClock = recoveryClock + 1
-        local operation = {
-            id = tostring(recoveryClock) .. ".recovery." .. Addon.Util.NormalizeCharacter(restorer),
-            clock = recoveryClock,
-            author = restorer,
-            timestamp = restoredAt,
-            kind = kind,
-        }
-        for key, value in pairs(fields or {}) do operation[key] = value end
-        recoveryOperations[operation.id] = operation
-    end
-
-    -- A high-clock RESET followed by the saved placements makes this recovery
-    -- win after CRDT union with ordinary older operations on other clients.
-    RecoveryOperation("RESET")
-    for _, tier in ipairs(Addon.tierOrder) do
-        local previous
-        for _, key in ipairs(incoming.board[tier] or {}) do
-            RecoveryOperation("MOVE", { key = tostring(key), tier = tier, after = previous })
-            previous = tostring(key)
-        end
-    end
+    Addon.Official:AdvanceAuthority(nil, nil)
+    local authorityRevision = tonumber(Addon.Official:GetAuthority().revision) or 0
 
     official.board = DeepCopy(incoming.board)
-    official.revision = tonumber(incoming.official.revision) or 0
+    official.revision = math.max(
+        tonumber(official.revision) or 0,
+        tonumber(incoming.official.revision) or 0
+    ) + 1
     official.lastModifiedBy = restorer
     official.lastModifiedAt = restoredAt
     official.audit = DeepCopy(incoming.audit)
-    official.baseBoard = {}
-    official.baseRevision = math.max(tonumber(official.baseRevision) or 0, tonumber(incoming.base.revision) or 0) + 1
+    official.baseBoard = DeepCopy(incoming.board)
+    official.baseRevision = official.revision
     official.baseLastModifiedBy = restorer
     official.baseLastModifiedAt = restoredAt
-    official.operations = recoveryOperations
-    official.operationClock = recoveryClock
-    official.operationStateVersion = 1
+    official.baseAuthorityRevision = authorityRevision
+    official.operations = {}
+    official.operationClock = 0
+    official.operationStateVersion = 2
+    Addon.Official:AddAuditEntry(
+        "Restored official tier and gear data from " .. DisplayTime(record.timestamp) .. ".",
+        restorer,
+        true
+    )
 
     local previousSpells = Addon.db.customSpells or {}
     Addon.db.customSpells = DeepCopy(incoming.spells)

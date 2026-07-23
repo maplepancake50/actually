@@ -1728,11 +1728,19 @@ function Board:RefreshListControls()
     if Addon:IsOfficialList() then
         local official = Addon.db.lists.official
         local revision = tonumber(official.revision) or 0
-        local mode = isOfficer and "|cff77dd77OFFICER EDIT|r" or "|cffaaaaaaread-only|r"
+        local syncReady = not Addon.Sync or not Addon.Sync.IsOfficialEditReady
+            or Addon.Sync:IsOfficialEditReady()
+        local canEdit = isOfficer and syncReady
+        local mode
+        if isOfficer and not syncReady then
+            mode = "|cffffcc55SYNCING - EDIT LOCKED|r"
+        else
+            mode = isOfficer and "|cff77dd77OFFICER EDIT|r" or "|cffaaaaaaread-only|r"
+        end
         local editorName = official.lastModifiedBy and Addon.Util.ShortName(official.lastModifiedBy)
         local lastEditor = editorName and ("  |cffaaaaaaby " .. editorName .. "|r") or ""
         self.listSubtitle:SetText(mode .. "  Rev " .. revision .. lastEditor)
-        if isOfficer then
+        if canEdit then
             self.resetButton:Enable()
             self.addSpellButton:Enable()
             self.batchCaptureButton:Enable()

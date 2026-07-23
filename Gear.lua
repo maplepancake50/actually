@@ -43,7 +43,11 @@ local function PlayerIdentity()
 end
 
 function Gear:IsOfficer()
-    return Addon.Official and Addon.Official:IsOfficer() or false
+    if not Addon.Official or not Addon.Official:IsOfficer() then
+        return false
+    end
+    return not Addon.Sync or not Addon.Sync.IsOfficialEditReady
+        or Addon.Sync:IsOfficialEditReady()
 end
 
 function Gear:GetStorage()

@@ -7,7 +7,8 @@ local ShortName = Addon.Util.ShortName
 local NormalizeCharacter = Addon.Util.NormalizeCharacter
 
 local PREFIX = Addon.MESSAGE_PREFIX
-local PROTOCOL = 3
+local PROTOCOL = 4
+local LEGACY_PROTOCOL = 3
 local HEARTBEAT_INTERVAL = 30
 local PEER_TIMEOUT = 75
 local RETRY_INTERVAL = 10
@@ -123,7 +124,20 @@ function Sync:Serialize()
         Encode(official.baseLastModifiedBy),
         tostring(tonumber(official.baseLastModifiedAt) or 0),
         tostring(tonumber(official.operationClock) or 0),
+        tostring(tonumber(official.baseAuthorityRevision) or 0),
     }, "\t"))
+
+    local authority = Addon.Official and Addon.Official:GetAuthority() or Addon.db.authority
+    table.insert(lines, table.concat({
+        "W", tostring(tonumber(authority.revision) or 0), Encode(authority.owner),
+        tostring(tonumber(authority.updatedAt) or 0), Encode(authority.updatedBy),
+        Encode(authority.changeID),
+    }, "\t"))
+    for identity, enabled in pairs(authority.officers or {}) do
+        if enabled == true then
+            table.insert(lines, table.concat({ "F", Encode(identity) }, "\t"))
+        end
+    end
 
     for _, tier in ipairs(Addon.tierOrder) do
         table.insert(lines, BoardLine(tier, official.board or {}))
@@ -139,6 +153,7 @@ function Sync:Serialize()
             "Y", Encode(operation.id or id), tostring(tonumber(operation.clock) or 0),
             Encode(operation.author), tostring(tonumber(operation.timestamp) or 0), Encode(operation.kind),
             Encode(operation.key), Encode(operation.tier), Encode(operation.before), Encode(operation.after),
+            tostring(tonumber(operation.authorityRevision) or tonumber(authority.revision) or 0),
         }, "\t"))
     end
 
@@ -236,6 +251,7 @@ function Sync:Serialize()
         table.insert(lines, table.concat({
             "A", Encode(entry.id), tostring(tonumber(entry.revision) or 0), Encode(entry.author),
             tostring(tonumber(entry.timestamp) or 0), entry.activity and "1" or "0", Encode(entry.action),
+            tostring(tonumber(entry.authorityRevision) or 0),
         }, "\t"))
     end
 
@@ -313,12 +329,18 @@ local function EnsureThread(spellID)
 end
 
 function Sync:Deserialize(snapshot)
-    local data = { board = {}, baseBoard = {}, operations = {}, spells = {}, spellTombstones = {}, gearSets = {}, gearTombstones = {}, knownPeers = {}, priority = {}, priorityDeleted = {}, comments = {}, deleted = {}, audit = {} }
+    local data = {
+        board = {}, baseBoard = {}, operations = {}, spells = {}, spellTombstones = {},
+        gearSets = {}, gearTombstones = {}, knownPeers = {}, priority = {},
+        priorityDeleted = {}, comments = {}, deleted = {}, audit = {},
+        authority = { officers = {} },
+    }
     for line in string.gmatch((snapshot or "") .. "\n", "(.-)\n") do
         local field = Fields(line)
         local kind = field[1]
         if kind == "V" then
-            if tonumber(field[2]) ~= PROTOCOL then
+            data.protocol = tonumber(field[2])
+            if data.protocol ~= PROTOCOL and data.protocol ~= LEGACY_PROTOCOL then
                 return nil
             end
         elseif kind == "O" then
@@ -329,7 +351,20 @@ function Sync:Deserialize(snapshot)
                 lastModifiedBy = Decode(field[3]),
                 lastModifiedAt = tonumber(field[4]) or 0,
                 operationClock = tonumber(field[5]) or 0,
+                authorityRevision = tonumber(field[6]) or 0,
             }
+        elseif kind == "W" then
+            data.authority.revision = tonumber(field[2]) or 0
+            data.authority.owner = Decode(field[3])
+            data.authority.updatedAt = tonumber(field[4]) or 0
+            data.authority.updatedBy = Decode(field[5])
+            data.authority.changeID = Decode(field[6])
+            data.hasAuthority = true
+        elseif kind == "F" then
+            local identity = Decode(field[2])
+            if identity ~= "" then
+                data.authority.officers[identity] = true
+            end
         elseif kind == "B" and field[2] then
             data.board[field[2]] = {}
             for _, key in ipairs(Split(field[3], ",")) do
@@ -353,6 +388,7 @@ function Sync:Deserialize(snapshot)
                     tier = Decode(field[8]),
                     before = Decode(field[9]),
                     after = Decode(field[10]),
+                    authorityRevision = tonumber(field[11]),
                 }
             end
         elseif kind == "S" and tonumber(field[2]) then
@@ -398,8 +434,16 @@ function Sync:Deserialize(snapshot)
         elseif kind == "X" then
             table.insert(data.deleted, { spellID = field[2], id = Decode(field[3]), timestamp = tonumber(field[4]) or 0 })
         elseif kind == "A" then
-            table.insert(data.audit, { id = Decode(field[2]), revision = tonumber(field[3]) or 0, author = Decode(field[4]), timestamp = tonumber(field[5]) or 0, activity = field[6] == "1", action = Decode(field[7]) })
+            table.insert(data.audit, {
+                id = Decode(field[2]), revision = tonumber(field[3]) or 0,
+                author = Decode(field[4]), timestamp = tonumber(field[5]) or 0,
+                activity = field[6] == "1", action = Decode(field[7]),
+                authorityRevision = tonumber(field[8]),
+            })
         end
+    end
+    if data.protocol == PROTOCOL and not data.hasAuthority then
+        return nil
     end
     return data.official and data.base and data or nil
 end
@@ -428,6 +472,68 @@ local function OperationSignature(operation)
     }, "|")
 end
 
+local function AuthoritySignature(authority)
+    local officers = {}
+    for identity, enabled in pairs(authority and authority.officers or {}) do
+        if enabled == true then
+            table.insert(officers, tostring(identity))
+        end
+    end
+    table.sort(officers)
+    return table.concat({
+        tostring(authority and authority.owner or ""),
+        tostring(authority and authority.updatedBy or ""),
+        table.concat(officers, ","),
+    }, "|")
+end
+
+local function AuthorityOfficerCount(authority)
+    local count = 0
+    for _, enabled in pairs(authority and authority.officers or {}) do
+        if enabled == true then count = count + 1 end
+    end
+    return count
+end
+
+local function AuthorityPreferred(incoming, current)
+    local incomingRevision = tonumber(incoming and incoming.revision) or 0
+    local currentRevision = tonumber(current and current.revision) or 0
+    if incomingRevision ~= currentRevision then
+        return incomingRevision > currentRevision
+    end
+    local incomingTime = tonumber(incoming and incoming.updatedAt) or 0
+    local currentTime = tonumber(current and current.updatedAt) or 0
+    if incomingTime ~= currentTime then
+        return incomingTime > currentTime
+    end
+    local incomingChange = tostring(incoming and incoming.changeID or "")
+    local currentChange = tostring(current and current.changeID or "")
+    if incomingChange ~= currentChange then
+        if incomingChange == "" or currentChange == "" then
+            return incomingChange ~= ""
+        end
+        return incomingChange > currentChange
+    end
+    local incomingCount = AuthorityOfficerCount(incoming)
+    local currentCount = AuthorityOfficerCount(current)
+    if incomingCount ~= currentCount then
+        -- Version-10 migration: the owner's replica contains the superset of
+        -- grants, while individual officers may only know about themselves.
+        return incomingCount > currentCount
+    end
+    return AuthoritySignature(incoming) > AuthoritySignature(current)
+end
+
+local function ApplyAuthorityState(target, source)
+    target.owner = source.owner ~= "" and source.owner or nil
+    target.revision = tonumber(source.revision) or 0
+    target.updatedAt = tonumber(source.updatedAt) or 0
+    target.updatedBy = tostring(source.updatedBy or "")
+    target.changeID = tostring(source.changeID or "")
+    target.officers = Addon.Util.DeepCopy(source.officers or {})
+    target.stateVersion = 1
+end
+
 local function GearSetSignature(set)
     local parts = {
         tostring(set.name or ""), tostring(set.notes or ""), tostring(set.order or 0),
@@ -452,40 +558,101 @@ function Sync:ApplySnapshot(snapshot)
         self:Log("Rejected an invalid snapshot.")
         return false, false
     end
+    if incoming.protocol ~= PROTOCOL then
+        self:Log("Rejected a legacy network snapshot; it remains available for manual backup restore.")
+        return false, false
+    end
 
     local changed = false
 
-    -- Official placements are an operation-set CRDT. Baselines only compete
-    -- during migration; after that, operations are unioned and replayed.
+    -- Authority revisions are epochs. A newer epoch carries a checkpoint and
+    -- replaces obsolete operations; clients in the same epoch union operations.
     local official = Addon.db.lists.official
     if Addon.Official and Addon.Official.EnsureOperationState then
         official = Addon.Official:EnsureOperationState()
     end
+    local authority = Addon.Official and Addon.Official:GetAuthority() or Addon.db.authority
+    local previousAuthorityRevision = tonumber(authority.revision) or 0
+    local incomingAuthorityRevision = incoming.hasAuthority
+        and (tonumber(incoming.authority.revision) or 0) or previousAuthorityRevision
+    local authorityAdvanced = incoming.hasAuthority
+        and incomingAuthorityRevision > previousAuthorityRevision
+    if incoming.hasAuthority and AuthorityPreferred(incoming.authority, authority) then
+        ApplyAuthorityState(authority, incoming.authority)
+        changed = true
+    end
+    local currentAuthorityRevision = tonumber(authority.revision) or 0
+    local acceptIncomingOfficial = not incoming.hasAuthority
+        or incomingAuthorityRevision >= currentAuthorityRevision
+
+    if authorityAdvanced and currentAuthorityRevision == incomingAuthorityRevision then
+        official.baseBoard = incoming.baseBoard
+        official.baseRevision = tonumber(incoming.base.revision) or 0
+        official.baseLastModifiedBy = incoming.base.lastModifiedBy ~= "" and incoming.base.lastModifiedBy or nil
+        official.baseLastModifiedAt = tonumber(incoming.base.lastModifiedAt) or 0
+        official.baseAuthorityRevision = incomingAuthorityRevision
+        official.operations = {}
+        official.operationClock = tonumber(incoming.base.operationClock) or 0
+        changed = true
+    end
+
     local localBaseRevision = tonumber(official.baseRevision) or 0
     local localBaseModified = tonumber(official.baseLastModifiedAt) or 0
     local incomingBaseRevision = tonumber(incoming.base.revision) or 0
     local incomingBaseModified = tonumber(incoming.base.lastModifiedAt) or 0
-    local incomingBasePreferred = incomingBaseRevision > localBaseRevision
+    local incomingBaseAuthorityRevision = tonumber(incoming.base.authorityRevision)
+        or incomingAuthorityRevision
+    local localBaseAuthorityRevision = tonumber(official.baseAuthorityRevision) or currentAuthorityRevision
+    local incomingBasePreferred = acceptIncomingOfficial and (
+        incomingBaseAuthorityRevision > localBaseAuthorityRevision
+        or (incomingBaseAuthorityRevision == localBaseAuthorityRevision and (
+            incomingBaseRevision > localBaseRevision
         or (incomingBaseRevision == localBaseRevision and incomingBaseModified > localBaseModified)
         or (incomingBaseRevision == localBaseRevision and incomingBaseModified == localBaseModified
-            and BoardSignature(incoming.baseBoard) > BoardSignature(official.baseBoard or {}))
+            and BoardSignature(incoming.baseBoard) > BoardSignature(official.baseBoard or {}))))
+    )
     if incomingBasePreferred then
         official.baseBoard = incoming.baseBoard
         official.baseRevision = incomingBaseRevision
         official.baseLastModifiedBy = incoming.base.lastModifiedBy ~= "" and incoming.base.lastModifiedBy or nil
         official.baseLastModifiedAt = incomingBaseModified
+        official.baseAuthorityRevision = incomingBaseAuthorityRevision
+        if incomingBaseAuthorityRevision > localBaseAuthorityRevision then
+            official.operations = {}
+        end
         changed = true
     end
 
     official.operations = type(official.operations) == "table" and official.operations or {}
-    for id, operation in pairs(incoming.operations) do
-        local localOperation = official.operations[id]
-        if not localOperation or OperationSignature(operation) > OperationSignature(localOperation) then
-            official.operations[id] = operation
+    if acceptIncomingOfficial then
+        for id, operation in pairs(incoming.operations) do
+            if operation.authorityRevision == nil and incoming.protocol == LEGACY_PROTOCOL then
+                operation.authorityRevision = currentAuthorityRevision
+            end
+            if not Addon.Official or Addon.Official:IsOperationAuthorized(operation, authority) then
+                local localOperation = official.operations[id]
+                if not localOperation or OperationSignature(operation) > OperationSignature(localOperation) then
+                    official.operations[id] = operation
+                    changed = true
+                end
+            else
+                self:Log("Rejected an unauthorized official operation from a snapshot.")
+            end
+        end
+    end
+
+    for id, operation in pairs(official.operations) do
+        if Addon.Official and not Addon.Official:IsOperationAuthorized(operation, authority) then
+            official.operations[id] = nil
             changed = true
         end
     end
-    official.operationClock = math.max(tonumber(official.operationClock) or 0, tonumber(incoming.base.operationClock) or 0)
+    if acceptIncomingOfficial then
+        official.operationClock = math.max(
+            tonumber(official.operationClock) or 0,
+            tonumber(incoming.base.operationClock) or 0
+        )
+    end
     if Addon.Official and Addon.Official.RebuildBoard then
         local oldSignature = BoardSignature(official.board or {})
         Addon.Official:RebuildBoard()
@@ -655,6 +822,22 @@ function Sync:GetLeader()
     return leader
 end
 
+function Sync:ExtendOfficialEditLock(seconds)
+    local untilTime = Now() + (tonumber(seconds) or 0)
+    self.officialEditLockedUntil = math.max(tonumber(self.officialEditLockedUntil) or 0, untilTime)
+    self.lastEditReady = false
+    if Addon.Board then
+        Addon.Board:RefreshListControls()
+    end
+end
+
+function Sync:IsOfficialEditReady()
+    if not self.initialized then
+        return true
+    end
+    return Now() >= (tonumber(self.officialEditLockedUntil) or 0)
+end
+
 function Sync:GetActivePeerCount()
     local count = 0
     local now = Now()
@@ -677,6 +860,7 @@ function Sync:BeginLeaderTerm()
         end
     end
     self.leaderSettlingUntil = now + 5
+    self:ExtendOfficialEditLock(6)
     self:Log("Leader reconciliation started; requested " .. tostring(requested) .. " differing peer snapshot(s).")
     self:SendHeartbeat()
 end
@@ -842,6 +1026,7 @@ function Sync:BroadcastOfficialChange(operations, auditEntry)
             "SYNC", "O", Encode(operation.id), tostring(tonumber(operation.clock) or 0),
             Encode(operation.author), tostring(tonumber(operation.timestamp) or 0), Encode(operation.kind),
             Encode(operation.key), Encode(operation.tier), Encode(operation.before), Encode(operation.after),
+            tostring(tonumber(operation.authorityRevision) or 0),
         }, "|")
         if string.len(payload) <= MAX_LIVE_PAYLOAD then
             self:BroadcastLive(payload)
@@ -853,6 +1038,7 @@ function Sync:BroadcastOfficialChange(operations, auditEntry)
         local payload = table.concat({
             "SYNC", "J", Encode(auditEntry.id), tostring(tonumber(auditEntry.revision) or 0),
             Encode(auditEntry.author), tostring(tonumber(auditEntry.timestamp) or 0), Encode(auditEntry.action),
+            tostring(tonumber(auditEntry.authorityRevision) or 0),
         }, "|")
         if string.len(payload) <= MAX_LIVE_PAYLOAD then
             self:BroadcastLive(payload)
@@ -862,13 +1048,30 @@ function Sync:BroadcastOfficialChange(operations, auditEntry)
     end
 end
 
+function Sync:BroadcastAuthorityChange(revision)
+    if not self.initialized then
+        return
+    end
+    local authority = Addon.Official and Addon.Official:GetAuthority() or Addon.db.authority
+    local payload = table.concat({
+        "SYNC", "R", tostring(tonumber(revision) or tonumber(authority.revision) or 0),
+        Encode(authority.owner), Encode(authority.updatedBy),
+    }, "|")
+    self:BroadcastLive(payload)
+end
+
 function Sync:SendHello(channel, target)
     channel = channel or "GUILD"
     if channel == "GUILD" and Now() - (self.lastGuildHello or -100) < 1 then
         return
     end
     local _, digest = self:GetSnapshot()
-    self:QueueMessage("SYNC|H|" .. tostring(PROTOCOL) .. "|" .. digest, channel, target)
+    local authorityRevision = Addon.Official and Addon.Official:GetAuthority().revision or 0
+    self:QueueMessage(
+        "SYNC|H|" .. tostring(PROTOCOL) .. "|" .. digest .. "|" .. tostring(authorityRevision),
+        channel,
+        target
+    )
     if channel == "GUILD" then
         self.lastGuildHello = Now()
     end
@@ -1036,6 +1239,7 @@ function Sync:PrintStatus(force)
         "Sync leader: " .. leaderName
             .. "; users: " .. tostring(peerCount)
             .. "; official rev: " .. tostring(Addon.db.lists.official.revision or 0)
+            .. "; authority rev: " .. tostring(Addon.Official:GetAuthority().revision or 0)
             .. "; spells: " .. tostring(spellCount)
             .. "; comments: " .. tostring(commentCount)
             .. "; queue: " .. tostring(self:GetQueueCount())
@@ -1076,7 +1280,7 @@ function Sync:ForceSync(target)
     end
 end
 
-function Sync:HandleHello(sender, channel, digest)
+function Sync:HandleHello(sender, channel, digest, authorityRevision)
     local key = PeerKey(sender)
     local wasKnown = self.peers[key] ~= nil
     self.peers[key] = { name = sender, lastSeen = Now(), digest = digest }
@@ -1087,6 +1291,10 @@ function Sync:HandleHello(sender, channel, digest)
 
     local _, ownDigest = self:GetSnapshot()
     if digest ~= ownDigest then
+        local localAuthorityRevision = tonumber(Addon.Official:GetAuthority().revision) or 0
+        if tonumber(authorityRevision) and tonumber(authorityRevision) > localAuthorityRevision then
+            self:ExtendOfficialEditLock(15)
+        end
         local leader = self:GetLeader()
         if leader == self.selfKey or leader == key then
             self:RequestSnapshot(sender)
@@ -1095,8 +1303,8 @@ function Sync:HandleHello(sender, channel, digest)
 end
 
 function Sync:ApplyLiveOfficialOperation(rest, sender)
-    local id, clock, author, timestamp, kind, key, tier, before, after = string.match(
-        rest or "", "^([^|]+)|(%d+)|([^|]*)|(%d+)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)$"
+    local id, clock, author, timestamp, kind, key, tier, before, after, authorityRevision = string.match(
+        rest or "", "^([^|]+)|(%d+)|([^|]*)|(%d+)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|([^|]*)|(%d+)$"
     )
     id, author, kind = Decode(id), Decode(author), Decode(kind)
     if id == "" or (kind ~= "MOVE" and kind ~= "REMOVE" and kind ~= "RESET") then
@@ -1112,7 +1320,14 @@ function Sync:ApplyLiveOfficialOperation(rest, sender)
         tier = Decode(tier),
         before = Decode(before),
         after = Decode(after),
+        authorityRevision = tonumber(authorityRevision) or 0,
     }
+    local authority = Addon.Official:GetAuthority()
+    if not Addon.Official:IsSenderAuthor(sender, operation.author)
+        or not Addon.Official:IsOperationAuthorized(operation, authority) then
+        self:Log("Rejected an unauthorized live official operation from " .. ShortName(sender) .. ".")
+        return false
+    end
     local official = Addon.Official:EnsureOperationState()
     local existing = official.operations[id]
     if existing and OperationSignature(existing) >= OperationSignature(operation) then
@@ -1127,10 +1342,20 @@ function Sync:ApplyLiveOfficialOperation(rest, sender)
     return true
 end
 
-function Sync:ApplyLiveAudit(rest)
-    local id, revision, author, timestamp, action = string.match(rest or "", "^([^|]+)|(%d+)|([^|]*)|(%d+)|(.*)$")
+function Sync:ApplyLiveAudit(rest, sender)
+    local id, revision, author, timestamp, action, authorityRevision = string.match(
+        rest or "", "^([^|]+)|(%d+)|([^|]*)|(%d+)|(.-)|(%d+)$"
+    )
     id = Decode(id)
     if id == "" then
+        return false
+    end
+    author = Decode(author)
+    local authority = Addon.Official:GetAuthority()
+    if tonumber(authorityRevision) ~= tonumber(authority.revision)
+        or not Addon.Official:IsSenderAuthor(sender, author)
+        or not Addon.Official:IsOfficerInAuthority(author, authority) then
+        self:Log("Rejected an unauthorized live audit entry from " .. ShortName(sender) .. ".")
         return false
     end
     local official = Addon.db.lists.official
@@ -1143,9 +1368,10 @@ function Sync:ApplyLiveAudit(rest)
     table.insert(official.audit, {
         id = id,
         revision = tonumber(revision) or tonumber(official.revision) or 0,
-        author = Decode(author),
+        author = author,
         timestamp = tonumber(timestamp) or 0,
         action = Decode(action),
+        authorityRevision = tonumber(authorityRevision) or 0,
     })
     table.sort(official.audit, function(left, right)
         if (left.timestamp or 0) ~= (right.timestamp or 0) then
@@ -1177,14 +1403,22 @@ function Sync:HandleMessage(message, channel, sender)
     self.peers[senderKey] = peer
 
     if kind == "H" then
-        local protocol, digest = string.match(rest, "^(%d+)|(.+)$")
+        local protocol, digest, authorityRevision = string.match(rest, "^(%d+)|([^|]+)|?(%d*)$")
         if tonumber(protocol) == PROTOCOL then
-            self:HandleHello(sender, channel, digest)
+            self:HandleHello(sender, channel, digest, tonumber(authorityRevision))
         end
     elseif kind == "O" then
         self:ApplyLiveOfficialOperation(rest, sender)
     elseif kind == "J" then
-        self:ApplyLiveAudit(rest)
+        self:ApplyLiveAudit(rest, sender)
+    elseif kind == "R" then
+        local revision = tonumber(string.match(rest or "", "^(%d+)|")) or 0
+        local localRevision = tonumber(Addon.Official:GetAuthority().revision) or 0
+        if revision > localRevision then
+            self:ExtendOfficialEditLock(15)
+            self:RequestSnapshot(sender, true)
+            self:Log("Authority update announced by " .. ShortName(sender) .. "; requested checkpoint.")
+        end
     elseif kind == "U" then
         local key = PeerKey(sender)
         self.peers[key] = { name = sender, lastSeen = Now(), digest = rest }
@@ -1268,6 +1502,17 @@ function Sync:OnUpdate(elapsed)
     end
 
     local now = Now()
+    local editReady = self:IsOfficialEditReady()
+    if editReady ~= self.lastEditReady then
+        self.lastEditReady = editReady
+        if Addon.Board then
+            Addon.Board:RefreshListControls()
+        end
+        if editReady and Addon.Official and Addon.Official:IsOwner()
+            and Addon.Official.MaybeCompactOperations then
+            Addon.Official:MaybeCompactOperations()
+        end
+    end
     if now >= self.nextHeartbeat then
         self.nextHeartbeat = now + HEARTBEAT_INTERVAL
         self:SendHeartbeat()
@@ -1334,6 +1579,8 @@ function Sync:Initialize()
     self.nextDiscovery = Now() + 3
     self.lastLeader = nil
     self.leaderSettlingUntil = 0
+    self.officialEditLockedUntil = Now() + 6
+    self.lastEditReady = false
     local canonicalPeers = {}
     for _, peerName in pairs(Addon.db.sync.knownPeers or {}) do
         canonicalPeers[PeerKey(peerName)] = ShortName(peerName)
@@ -1343,6 +1590,9 @@ function Sync:Initialize()
     self.logs = {}
     self.debugEnabled = false
     self:Log("Sync initialized for " .. ShortName(UnitName("player")) .. ".")
+    if Addon.Board then
+        Addon.Board:RefreshListControls()
+    end
 
     local frame = CreateFrame("Frame")
     frame:RegisterEvent("CHAT_MSG_ADDON")

@@ -6,7 +6,7 @@ local Util = Addon.Util or {}
 Addon.Util = Util
 
 Addon.name = addonName or "actually"
-Addon.version = "0.2.17"
+Addon.version = "0.3.0"
 Addon.MESSAGE_PREFIX = "ACTUALLY"
 Addon.tierOrder = { "S", "A", "B", "C", "D", "U" }
 Addon.DEFAULT_PERSONAL_LIST_NAME = "My Tier List"
@@ -63,7 +63,7 @@ function Util.SetBackdrop(frame, color, borderColor)
 end
 
 local defaults = {
-    version = 10,
+    version = 11,
     customSpells = {},
     spellTombstones = {},
     sync = {
@@ -109,6 +109,11 @@ local defaults = {
     },
     authority = {
         officers = {},
+        revision = 0,
+        updatedAt = 0,
+        updatedBy = "",
+        changeID = "",
+        stateVersion = 1,
     },
     lists = {
         personal = {},
@@ -122,6 +127,7 @@ local defaults = {
             baseLastModifiedAt = 0,
             operations = {},
             operationClock = 0,
+            baseAuthorityRevision = 0,
         },
     },
     activeList = {
@@ -172,10 +178,21 @@ local function IsLegacyBoardAudit(entry)
 end
 
 local function InitializeListStorage(db)
+    local previousVersion = tonumber(db.version) or 0
     db.lists = type(db.lists) == "table" and db.lists or {}
     db.lists.personal = type(db.lists.personal) == "table" and db.lists.personal or {}
     db.lists.official = CopyDefaults(defaults.lists.official, db.lists.official)
     db.lists.official.audit = type(db.lists.official.audit) == "table" and db.lists.official.audit or {}
+    db.authority = CopyDefaults(defaults.authority, db.authority)
+    db.authority.officers = type(db.authority.officers) == "table" and db.authority.officers or {}
+    db.authority.revision = tonumber(db.authority.revision) or 0
+    if db.authority.owner and db.authority.owner ~= "" and db.authority.revision < 1 then
+        db.authority.revision = 1
+    end
+    db.authority.updatedAt = tonumber(db.authority.updatedAt) or 0
+    db.authority.updatedBy = tostring(db.authority.updatedBy or db.authority.owner or "")
+    db.authority.changeID = tostring(db.authority.changeID or "")
+    db.authority.stateVersion = 1
     local official = db.lists.official
     if type(official.operations) ~= "table" then
         official.operations = {}
@@ -204,10 +221,19 @@ local function InitializeListStorage(db)
         official.baseLastModifiedAt = boardModifiedAt or tonumber(official.lastModifiedAt) or 0
         official.operations = {}
         official.operationClock = 0
-        official.operationStateVersion = 1
+        official.operationStateVersion = 2
     end
-    db.authority = CopyDefaults(defaults.authority, db.authority)
-    db.authority.officers = type(db.authority.officers) == "table" and db.authority.officers or {}
+    if previousVersion < 11 then
+        official.baseAuthorityRevision = db.authority.revision
+    else
+        official.baseAuthorityRevision = tonumber(official.baseAuthorityRevision) or db.authority.revision
+    end
+    for _, operation in pairs(official.operations) do
+        if type(operation) == "table" and operation.authorityRevision == nil then
+            operation.authorityRevision = db.authority.revision
+        end
+    end
+    official.operationStateVersion = 2
     db.discussions = type(db.discussions) == "table" and db.discussions or {}
     db.gear = type(db.gear) == "table" and db.gear or {}
     db.gear.sets = type(db.gear.sets) == "table" and db.gear.sets or {}
@@ -253,7 +279,7 @@ local function InitializeListStorage(db)
     end
 
     db.board = nil
-    db.version = 10
+    db.version = 11
 end
 
 function Addon:GetActiveList()
@@ -268,7 +294,13 @@ function Addon:IsOfficialList()
 end
 
 function Addon:CanEditActiveList()
-    return not self:IsOfficialList() or (self.Official and self.Official:IsOfficer())
+    if not self:IsOfficialList() then
+        return true
+    end
+    if not self.Official or not self.Official:IsOfficer() then
+        return false
+    end
+    return not self.Sync or not self.Sync.IsOfficialEditReady or self.Sync:IsOfficialEditReady()
 end
 
 function Addon:SetActiveList(kind, name)

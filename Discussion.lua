@@ -16,6 +16,14 @@ local function PlayerIdentity()
     return UnitName("player") or "Unknown"
 end
 
+local function CanEditOfficerContent()
+    if not Addon.Official or not Addon.Official:IsOfficer() then
+        return false
+    end
+    return not Addon.Sync or not Addon.Sync.IsOfficialEditReady
+        or Addon.Sync:IsOfficialEditReady()
+end
+
 local function CleanText(value)
     value = Trim(value)
     value = string.gsub(value, "[\r\n|]", " ")
@@ -95,6 +103,10 @@ function Discussion:Broadcast(spellID, kind, text, commentID, officer)
 end
 
 function Discussion:SetPriority(spellID, author, text, broadcast, eventTimestamp)
+    if broadcast and not CanEditOfficerContent() then
+        Addon:Print("Wait for official-list synchronization before editing Officer Notes.")
+        return
+    end
     local thread = self:GetThread(spellID)
     if not thread then
         return
@@ -129,7 +141,9 @@ function Discussion:SetPriority(spellID, author, text, broadcast, eventTimestamp
     end
 
     if broadcast then
-        self:Broadcast(spellID, "P", tostring(eventTimestamp) .. "|" .. text)
+        local authorityRevision = Addon.Official and Addon.Official:GetAuthority().revision or 0
+        self:Broadcast(spellID, "P", tostring(eventTimestamp) .. "|"
+            .. tostring(authorityRevision) .. "|" .. text)
     end
     if broadcast then
         if text == "" then
@@ -390,7 +404,7 @@ function Discussion:Refresh()
     self.priorityArea:SetVerticalScroll(0)
     self.communityArea:SetVerticalScroll(math.max(0, self.communityArea.canvas:GetHeight() - self.communityArea:GetHeight()))
 
-    local isOfficer = Addon.Official and Addon.Official:IsOfficer()
+    local isOfficer = CanEditOfficerContent()
     local ownEntry = thread.priority[NormalizeIdentity(PlayerIdentity())]
     self.priorityInput:SetText(ownEntry and ownEntry.text or "")
     if isOfficer then
@@ -501,7 +515,7 @@ function Discussion:Create()
     priorityButton:SetPoint("LEFT", priorityInput, "RIGHT", 8, 0)
     priorityButton:SetText("Save Note")
     priorityButton:SetScript("OnClick", function()
-        if not Discussion.spell or not Addon.Official or not Addon.Official:IsOfficer() then
+        if not Discussion.spell or not CanEditOfficerContent() then
             return
         end
         Discussion:SetPriority(Discussion.spell.spellID, PlayerIdentity(), priorityInput:GetText(), true)
@@ -583,7 +597,9 @@ messageFrame:SetScript("OnEvent", function(_, event, prefix, message, channel, s
         if not spellID then
             return
         end
-        Discussion:AddComment(spellID, ShortName(sender), text, false, commentID, officerFlag == "1")
+        local isOfficer = officerFlag == "1" and Addon.Official
+            and Addon.Official:IsOfficer(sender)
+        Discussion:AddComment(spellID, ShortName(sender), text, false, commentID, isOfficer == true)
         return
     end
 
@@ -596,18 +612,36 @@ messageFrame:SetScript("OnEvent", function(_, event, prefix, message, channel, s
         end
 
         if kind == "D" then
-            Discussion:DeleteComment(spellID, commentID, false, tonumber(text))
+            local thread = Discussion:GetThread(spellID)
+            local allowed = Addon.Official and Addon.Official:IsOfficer(sender)
+            if not allowed then
+                for _, entry in ipairs(thread and thread.comments or {}) do
+                    if entry.id == commentID
+                        and NormalizeIdentity(entry.author) == NormalizeIdentity(sender) then
+                        allowed = true
+                        break
+                    end
+                end
+            end
+            if allowed then
+                Discussion:DeleteComment(spellID, commentID, false, tonumber(text))
+            end
         else
             Discussion:AddComment(spellID, ShortName(sender), text, false, commentID)
         end
         return
     end
 
-    local priorityTimestamp
-    spellIDText, priorityTimestamp, text = string.match(message or "", "^DISC|(%d+)|P|(%d+)|(.*)$")
+    local priorityTimestamp, authorityRevision
+    spellIDText, priorityTimestamp, authorityRevision, text = string.match(
+        message or "", "^DISC|(%d+)|P|(%d+)|(%d+)|(.*)$"
+    )
     if spellIDText then
         local spellID = tonumber(spellIDText)
-        if spellID then
+        local currentAuthorityRevision = Addon.Official
+            and tonumber(Addon.Official:GetAuthority().revision) or 0
+        if spellID and tonumber(authorityRevision) == currentAuthorityRevision
+            and Addon.Official and Addon.Official:IsOfficer(sender) then
             Discussion:SetPriority(spellID, ShortName(sender), text, false, tonumber(priorityTimestamp))
         end
         return
@@ -620,7 +654,8 @@ messageFrame:SetScript("OnEvent", function(_, event, prefix, message, channel, s
     end
 
     if kind == "P" then
-        Discussion:SetPriority(spellID, ShortName(sender), text, false)
+        -- Officer notes require the authority revision carried by the new format.
+        return
     else
         Discussion:AddComment(spellID, ShortName(sender), text, false)
     end

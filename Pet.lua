@@ -47,8 +47,8 @@ local ANIMATIONS = {
         durations = { 0.45, 0.50, 0.45, 0.50, 0.35, 0.10 },
     },
     snoring = {
-        frames = { 15, 16, 15, 16 },
-        durations = { 0.62, 0.74, 0.66, 0.78 },
+        frames = { 5, 7, 5, 7 },
+        durations = { 0.78, 0.86, 0.82, 0.90 },
         loop = true,
     },
     mercenaryCast = {
@@ -68,6 +68,30 @@ local ANIMATIONS = {
     perky = {
         frames = { 1, 13, 14, 13, 1 },
         durations = { 0.12, 0.16, 0.22, 0.16, 0.12 },
+    },
+    sideEye = {
+        frames = { 1, 3, 3, 1, 4, 4, 1 },
+        durations = { 0.14, 0.22, 0.28, 0.12, 0.22, 0.26, 0.12 },
+    },
+    deadpan = {
+        frames = { 1, 15, 16, 15, 1 },
+        durations = { 0.14, 0.24, 0.34, 0.24, 0.12 },
+    },
+    browReaction = {
+        frames = { 1, 4, 1, 13, 14, 1 },
+        durations = { 0.12, 0.22, 0.12, 0.18, 0.24, 0.12 },
+    },
+    brightReaction = {
+        frames = { 1, 13, 14, 13, 14, 1 },
+        durations = { 0.12, 0.16, 0.22, 0.16, 0.24, 0.12 },
+    },
+    dozyBlink = {
+        frames = { 1, 15, 16, 5, 7, 15, 1 },
+        durations = { 0.14, 0.26, 0.34, 0.24, 0.32, 0.22, 0.12 },
+    },
+    startledRecover = {
+        frames = { 1, 13, 14, 12, 14, 1 },
+        durations = { 0.12, 0.18, 0.24, 0.28, 0.20, 0.12 },
     },
     talkNeutral = {
         frames = { 1, 2, 1, 2, 1, 2, 1 },
@@ -154,7 +178,6 @@ local CHATTER = {
     "need a tier list?",
     "*adjusts glasses*",
     "minor correction.",
-    "RAT MODELZ",
     "@pika",
     "going cache?",
     "Are we a zerg guild?",
@@ -227,6 +250,12 @@ local LEFT_CLICK_SAFE_ANIMATIONS = {
     curious = true,
     perky = true,
     happy = true,
+    sideEye = true,
+    deadpan = true,
+    browReaction = true,
+    brightReaction = true,
+    dozyBlink = true,
+    startledRecover = true,
     typingGaze = true,
     talkNeutral = true,
     talkBlink = true,
@@ -254,6 +283,19 @@ local DRAG_RELEASE_ANIMATIONS = {
     "happy",
 }
 
+local PASSIVE_EMOTES = {
+    "perky",
+    "curious",
+    "doubleBlink",
+    "sideEye",
+    "deadpan",
+    "browReaction",
+    "brightReaction",
+    "dozyBlink",
+    "startledRecover",
+    "sad",
+}
+
 local THOUGHTS = { 1, 2, 3 }
 
 local function RandomBlinkDelay()
@@ -265,11 +307,11 @@ local function RandomSneezeDelay()
 end
 
 local function RandomEmoteDelay()
-    return 16 + math.random() * 18
+    return 9 + math.random() * 9
 end
 
 local function RandomActivityDelay()
-    return 29.4 + math.random() * 30.8
+    return 24 + math.random() * 20
 end
 
 local function RandomThoughtDelay()
@@ -653,16 +695,22 @@ end
 
 function Pet:PlayPassiveEmote()
     self.blinkTimer = RandomBlinkDelay()
-    local roll = math.random(1, 100)
-    if roll <= 42 then
-        self:Play("perky")
-    elseif roll <= 68 then
-        self:Play("curious")
-    elseif roll <= 92 then
-        self:Play("doubleBlink")
-    else
-        self:Play("sad")
+    if not self.passiveEmoteBag or #self.passiveEmoteBag == 0 then
+        self.passiveEmoteBag = {}
+        for _, animationName in ipairs(PASSIVE_EMOTES) do
+            if animationName ~= self.lastPassiveEmote then
+                table.insert(self.passiveEmoteBag, animationName)
+            end
+        end
+        for index = #self.passiveEmoteBag, 2, -1 do
+            local swapIndex = math.random(1, index)
+            self.passiveEmoteBag[index], self.passiveEmoteBag[swapIndex]
+                = self.passiveEmoteBag[swapIndex], self.passiveEmoteBag[index]
+        end
     end
+    local animationName = table.remove(self.passiveEmoteBag)
+    self.lastPassiveEmote = animationName
+    self:Play(animationName)
 end
 
 function Pet:PlayTalkingAnimation()
