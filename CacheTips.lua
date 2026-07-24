@@ -455,6 +455,47 @@ function CacheTips:Create()
     self.arcAlertPulseCheckbox = CreateEffectCheckbox(
         "ActuallyARCAlertPulseCheckButton", "Pulse", 545, "pulse")
 
+    local arcOfficerConfig = CreateFrame("Button", nil, arcAlerts)
+    arcOfficerConfig:SetWidth(80)
+    arcOfficerConfig:SetHeight(23)
+    arcOfficerConfig:SetPoint("TOPRIGHT", arcAlerts, "TOPRIGHT", -15, -66)
+    SetBackdrop(
+        arcOfficerConfig,
+        { 0.035, 0.16, 0.27, 1.00 },
+        { 0.22, 0.72, 1.00, 0.96 })
+    local arcOfficerConfigText = arcOfficerConfig:CreateFontString(
+        nil, "OVERLAY", "GameFontHighlightSmall")
+    arcOfficerConfigText:SetPoint("CENTER", arcOfficerConfig, "CENTER", 0, 0)
+    arcOfficerConfigText:SetText("Config")
+    arcOfficerConfigText:SetTextColor(0.72, 0.91, 1.00)
+    local arcOfficerHighlight = arcOfficerConfig:CreateTexture(nil, "HIGHLIGHT")
+    arcOfficerHighlight:SetAllPoints(arcOfficerConfig)
+    arcOfficerHighlight:SetTexture("Interface\\Buttons\\WHITE8X8")
+    arcOfficerHighlight:SetVertexColor(0.20, 0.64, 1.00, 0.18)
+
+    local arcOfficerLabel = arcAlerts:CreateFontString(
+        nil, "OVERLAY", "GameFontHighlightSmall")
+    arcOfficerLabel:SetPoint("RIGHT", arcOfficerConfig, "LEFT", -8, 0)
+    arcOfficerLabel:SetText("Officer:")
+    arcOfficerLabel:SetTextColor(0.52, 0.78, 0.96)
+
+    arcOfficerConfig:SetScript("OnClick", function()
+        local arc = Addon.Modules and Addon.Modules.RaidCooldowns
+        if not arc or not arc.HasConfigurationAuthority
+            or not arc:HasConfigurationAuthority() then
+            return
+        end
+        if arc.CommanderConfig and arc.CommanderConfig.Toggle then
+            arc.CommanderConfig:Toggle()
+        elseif arc.Print then
+            arc:Print("commander configuration is unavailable")
+        end
+    end)
+    arcOfficerConfig:Hide()
+    arcOfficerLabel:Hide()
+    self.arcOfficerConfigButton = arcOfficerConfig
+    self.arcOfficerConfigLabel = arcOfficerLabel
+
     local roleHeading = root:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     roleHeading:SetPoint("TOPLEFT", root, "TOPLEFT", 2, -344)
     roleHeading:SetText("Role Tips")
@@ -521,6 +562,17 @@ function CacheTips:RefreshARCAlertControls()
     if not self.arcAlertScaleSlider then return end
     local arc = Addon.Modules and Addon.Modules.RaidCooldowns
     local ready = arc and arc.AlertUI and arc.AlertUI.initialized and arc.db and arc.db.profile
+    local hasOfficerAccess = arc and arc.HasConfigurationAuthority
+        and arc:HasConfigurationAuthority() == true
+    if self.arcOfficerConfigButton and self.arcOfficerConfigLabel then
+        if hasOfficerAccess then
+            self.arcOfficerConfigButton:Show()
+            self.arcOfficerConfigLabel:Show()
+        else
+            self.arcOfficerConfigButton:Hide()
+            self.arcOfficerConfigLabel:Hide()
+        end
+    end
     self.refreshingARCAlertControls = true
     local scale = ready and arc.AlertUI:GetScale() or 1
     self.arcAlertScaleSlider:SetValue(scale)
