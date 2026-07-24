@@ -91,8 +91,12 @@ function Bundles:Start(name, spellIDs, leaseReady, startedCallback)
         return false
     end
     if not leaseReady and not ARC.Automation:HasLocalLease() then
-        return ARC.Automation:Acquire(function()
-            Bundles:Start(name, spellIDs, true, startedCallback)
+        return ARC.Automation:Acquire(function(acquired, reason)
+            if acquired then
+                Bundles:Start(name, spellIDs, true, startedCallback)
+            elseif startedCallback then
+                startedCallback(false, nil, reason)
+            end
         end)
     end
 

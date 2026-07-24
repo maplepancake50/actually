@@ -105,9 +105,11 @@ end
 function Commander:ResolveStage(stage)
     if type(stage) ~= "table" then return nil end
     local bundle = stage.bundleID and self:FindBundle(stage.bundleID)
-    local source = bundle or stage
+    local missingBundle = stage.bundleID and not bundle and true or false
+    local source
+    if not missingBundle then source = bundle or stage end
     local unique, spells = {}, {}
-    for _, rawID in ipairs(source.spells or {}) do
+    for _, rawID in ipairs(source and source.spells or {}) do
         local spellID = ARC.Registry:Canonicalize(rawID)
         if spellID and not unique[spellID] then
             unique[spellID] = true
@@ -115,10 +117,10 @@ function Commander:ResolveStage(stage)
         end
     end
     return {
-        name = tostring(source.name or stage.name or "Cooldown stage"),
+        name = tostring((source and source.name) or stage.name or "Cooldown stage"),
         spells = spells,
         bundleID = stage.bundleID,
-        missingBundle = stage.bundleID and not bundle and true or false,
+        missingBundle = missingBundle,
     }
 end
 
@@ -177,6 +179,10 @@ function Commander:IsPlanActive(planID)
     return self.activePlanID == planID and ARC.Bundles and ARC.Bundles.active
 end
 
+function Commander:IsPlanPending(planID)
+    return self.pendingPlanID == planID
+end
+
 function Commander:StartPlan(planID)
     if not ARC:RequireCommandAuthority() then return false end
     local plan = self:FindPlan(planID)
@@ -193,9 +199,11 @@ function Commander:StartPlan(planID)
 
     local bundleName = tostring(plan.name) .. " - " .. tostring(stage.name)
     self.pendingPlanID = plan.id
+    self.pendingStartedAt = ARC:Now()
     local started = ARC.Bundles:Start(bundleName, stage.spells, false,
         function(success, bundle)
             Commander.pendingPlanID = nil
+            Commander.pendingStartedAt = nil
             if success and bundle then
                 Commander.activePlanID = plan.id
                 Commander.activeStageIndex = stageIndex
@@ -206,7 +214,10 @@ function Commander:StartPlan(planID)
             end
             Commander:Refresh()
         end)
-    if not started then self.pendingPlanID = nil end
+    if not started then
+        self.pendingPlanID = nil
+        self.pendingStartedAt = nil
+    end
     self:Refresh()
     return started
 end
@@ -267,8 +278,9 @@ function Commander:ShowTooltip(button)
                     target and 0.35 or 1.00, target and 1.00 or 0.40, target and 0.35 or 0.30)
             end
             if stage.missingBundle then
-                GameTooltip:AddLine("    Saved bundle was deleted; using its saved snapshot.",
-                    1.00, 0.55, 0.20)
+                GameTooltip:AddLine(
+                    "    Bundle is missing; this stage is disabled until reconfigured.",
+                    1.00, 0.35, 0.30)
             end
         end
     end
@@ -353,6 +365,14 @@ function Commander:RefreshButton(button, plan)
         button.glow:Show()
         button.arcActionable = false
         button:SetBackdropBorderColor(0.72, 0.35, 1.00, 1)
+    elseif self.pendingPlanID then
+        button.status:SetText(self.pendingPlanID == plan.id
+            and "STARTING - CLAIMING CONTROL" or "BUSY - COMMAND STARTING")
+        button.status:SetTextColor(0.76, 0.55, 1.00)
+        button.stage:SetTextColor(0.76, 0.55, 1.00)
+        button.glow:Hide()
+        button.arcActionable = false
+        button:SetBackdropBorderColor(0.50, 0.30, 0.70, 0.95)
     elseif self.activePlanID or ARC.Bundles.active or ARC.Requests.outgoing then
         button.status:SetText("BUSY - ANOTHER COMMAND")
         button.status:SetTextColor(0.58, 0.62, 0.68)
@@ -569,6 +589,15 @@ function Commander:OnUpdate(elapsed)
     self.elapsed = (self.elapsed or 0) + (elapsed or 0)
     if self.elapsed < 0.25 then return end
     self.elapsed = 0
+    if self.pendingPlanID and ARC:Now() - (self.pendingStartedAt or 0)
+        > math.max(2, (ARC.Constants.LEASE_CLAIM_WINDOW or 0.35) + 1) then
+        ARC:Print("pending cooldown command expired; try again")
+        if ARC.Automation.AbortProvisionalAcquire then
+            ARC.Automation:AbortProvisionalAcquire()
+        end
+        self.pendingPlanID = nil
+        self.pendingStartedAt = nil
+    end
     if not ARC:HasCommandAuthority() then
         if self.frame then self.frame:Hide() end
         return

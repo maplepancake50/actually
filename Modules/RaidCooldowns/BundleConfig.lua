@@ -2,8 +2,8 @@ local ARC = Actually.Modules.RaidCooldowns
 local BundleConfig = ARC:NewModule("BundleConfig")
 
 local PAGE_SIZE = 8
-local ROW_HEIGHT = 46
-local ROW_GAP = 3
+local ROW_HEIGHT = 43
+local ROW_GAP = 2
 local MIN_SCALE = 0.65
 local MAX_SCALE = 1.80
 
@@ -37,10 +37,19 @@ local function setBackdrop(frame, background, border)
     frame:SetBackdropBorderColor(border[1], border[2], border[3], border[4] or 1)
 end
 
-local function sortedSpellIDs()
+local function sortedSpellIDs(filter)
     local ids = {}
+    filter = string.lower(string.gsub(string.gsub(
+        tostring(filter or ""), "^%s+", ""), "%s+$", ""))
     for spellID, entry in pairs(ARC.Registry.entries) do
-        if entry.valid then table.insert(ids, spellID) end
+        if entry.valid then
+            local name = ARC.SpellInfo:ResolveSpellName(spellID)
+            local haystack = string.lower(tostring(spellID) .. " " .. tostring(name)
+                .. " " .. tostring(entry.category or ""))
+            if filter == "" or string.find(haystack, filter, 1, true) then
+                table.insert(ids, spellID)
+            end
+        end
     end
     table.sort(ids, function(left, right)
         local leftName = string.lower(ARC.SpellInfo:ResolveSpellName(left))
@@ -53,6 +62,15 @@ end
 
 local function trim(value)
     return string.gsub(string.gsub(tostring(value or ""), "^%s+", ""), "%s+$", "")
+end
+
+local function normalizedName(value)
+    return string.lower(trim(value))
+end
+
+local function newBundleID()
+    local epoch = time and time() or 0
+    return "bundle:" .. tostring(epoch) .. ":" .. tostring(math.random(100000, 999999))
 end
 
 local function clamp(value, minimum, maximum)
@@ -131,6 +149,7 @@ function BundleConfig:SetSpellSelected(spellID, selected)
             if self.selectionOrder[index] == spellID then table.remove(self.selectionOrder, index) end
         end
     end
+    self.dirty = true
     self:Refresh()
 end
 
@@ -145,7 +164,28 @@ function BundleConfig:MoveSelectedSpell(spellID, direction)
     if target == current then return end
     ids[current], ids[target] = ids[target], ids[current]
     self.selectionOrder = ids
+    self.dirty = true
     self:Refresh()
+end
+
+function BundleConfig:ShowSelectedTooltip(owner)
+    if not GameTooltip or not owner then return end
+    GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+    GameTooltip:ClearLines()
+    GameTooltip:SetText("Selected cooldown order", 0.32, 0.86, 1.00)
+    local ids = self:GetSelectedSpellIDs()
+    if table.getn(ids) == 0 then
+        GameTooltip:AddLine("No cooldowns selected", 1.00, 0.35, 0.35)
+    else
+        for index, spellID in ipairs(ids) do
+            GameTooltip:AddLine(tostring(index) .. ". " .. spellIconText(spellID)
+                .. ARC.SpellInfo:ResolveSpellName(spellID), 0.92, 0.96, 1.00)
+        end
+    end
+    GameTooltip:AddLine(" ")
+    GameTooltip:AddLine(
+        "ARC chooses ready players when the bundle is issued.", 0.55, 0.76, 0.88)
+    GameTooltip:Show()
 end
 
 function BundleConfig:GetCurrentBundleName()
@@ -265,16 +305,37 @@ function BundleConfig:GetBundles()
         bundles = {}
         ARC.db.profile.cooldownBundles = bundles
     end
+    for _, bundle in ipairs(bundles) do
+        if type(bundle) == "table" and not bundle.id then bundle.id = newBundleID() end
+    end
     return bundles
+end
+
+function BundleConfig:GetDependentPlans(bundleID)
+    local dependents = {}
+    if not bundleID or not ARC.Commander or not ARC.Commander.GetPlans then
+        return dependents
+    end
+    for _, plan in ipairs(ARC.Commander:GetPlans()) do
+        for _, stage in ipairs(plan.stages or {}) do
+            if stage.bundleID == bundleID then
+                table.insert(dependents, tostring(plan.name or "Unnamed command"))
+                break
+            end
+        end
+    end
+    table.sort(dependents)
+    return dependents
 end
 
 function BundleConfig:NewBundle()
     self.editingIndex = nil
     self.selected = {}
     self.selectionOrder = {}
-    self.nameBox:SetText("")
+    self:SetNameText("")
     self.nameBox:ClearFocus()
     self.spellPage = 1
+    self.dirty = false
     self:Refresh()
 end
 
@@ -292,9 +353,10 @@ function BundleConfig:LoadBundle(index)
             table.insert(self.selectionOrder, spellID)
         end
     end
-    self.nameBox:SetText(bundle.name or "")
+    self:SetNameText(bundle.name or "")
     self.nameBox:ClearFocus()
     self.spellPage = 1
+    self.dirty = false
     self:Refresh()
 end
 
@@ -309,26 +371,51 @@ function BundleConfig:SaveBundle()
 
     local bundles = self:GetBundles()
     local index = self.editingIndex
-    if not index or not bundles[index] then
-        index = table.getn(bundles) + 1
-        bundles[index] = {}
-    end
+    local existing = index and bundles[index]
+    index = existing and index or (table.getn(bundles) + 1)
     local name = trim(self.nameBox:GetText())
     if name == "" then name = "Cooldown Bundle " .. tostring(index) end
     if #name > 60 then name = string.sub(name, 1, 60) end
-    bundles[index].name = name
-    bundles[index].spells = ids
+    for otherIndex, other in ipairs(bundles) do
+        if otherIndex ~= index and normalizedName(other.name) == normalizedName(name) then
+            ARC:Print("a bundle named " .. name .. " already exists; choose a unique name")
+            return nil
+        end
+    end
+    local bundle = existing or { id = newBundleID() }
+    bundle.name = name
+    bundle.spells = ids
+    bundles[index] = bundle
     self.editingIndex = index
-    self.nameBox:SetText(name)
+    self:SetNameText(name)
+    self.dirty = false
     ARC:Print("saved bundle " .. name .. " (" .. tostring(table.getn(ids)) .. " spells)")
     self:Refresh()
-    return bundles[index]
+    if ARC.CommanderConfig and ARC.CommanderConfig.Refresh then
+        ARC.CommanderConfig:Refresh()
+    end
+    return bundle
+end
+
+function BundleConfig:SetNameText(value)
+    self.refreshingName = true
+    self.nameBox:SetText(value or "")
+    self.refreshingName = false
 end
 
 function BundleConfig:DeleteBundle()
     local bundles = self:GetBundles()
-    if not self.editingIndex or not bundles[self.editingIndex] then return end
-    local name = bundles[self.editingIndex].name
+    if not self.editingIndex or not bundles[self.editingIndex] then return false end
+    local bundle = bundles[self.editingIndex]
+    local name = bundle.name
+    local dependents = self:GetDependentPlans(bundle.id)
+    if table.getn(dependents) > 0 then
+        ARC:Print("cannot delete " .. tostring(name) .. "; used by command"
+            .. (table.getn(dependents) == 1 and " " or "s ")
+            .. table.concat(dependents, ", ")
+            .. ". Remove it from those commands and save them first.")
+        return false
+    end
     table.remove(bundles, self.editingIndex)
     ARC:Print("deleted bundle " .. tostring(name))
     if table.getn(bundles) > 0 then
@@ -336,6 +423,10 @@ function BundleConfig:DeleteBundle()
     else
         self:NewBundle()
     end
+    if ARC.CommanderConfig and ARC.CommanderConfig.Refresh then
+        ARC.CommanderConfig:Refresh()
+    end
+    return true
 end
 
 function BundleConfig:RequestBundle()
@@ -413,6 +504,18 @@ function BundleConfig:Refresh()
     else
         self.bundleText:SetText("New bundle  (" .. tostring(bundleCount) .. " saved)")
     end
+    if self.dirtyText then
+        if not self.editingIndex then
+            self.dirtyText:SetText("NEW - NOT SAVED")
+            self.dirtyText:SetTextColor(1.00, 0.70, 0.20)
+        elseif self.dirty then
+            self.dirtyText:SetText("UNSAVED CHANGES")
+            self.dirtyText:SetTextColor(1.00, 0.70, 0.20)
+        else
+            self.dirtyText:SetText("SAVED")
+            self.dirtyText:SetTextColor(0.35, 1.00, 0.35)
+        end
+    end
     if self.editingIndex and self.editingIndex > 1 then self.previousBundle:Enable()
     else self.previousBundle:Disable() end
     if (self.editingIndex and self.editingIndex < bundleCount)
@@ -456,6 +559,17 @@ function BundleConfig:Refresh()
     if self.spellPage > 1 then self.previousPage:Enable() else self.previousPage:Disable() end
     if self.spellPage < pages then self.nextPage:Enable() else self.nextPage:Disable() end
     if self.editingIndex then self.delete:Enable() else self.delete:Disable() end
+    if self.selectedSummaryText then
+        local selected = self:GetSelectedSpellIDs()
+        local names = {}
+        for _, spellID in ipairs(selected) do
+            table.insert(names, ARC.SpellInfo:ResolveSpellName(spellID))
+        end
+        local summary = table.concat(names, "  >  ")
+        if string.len(summary) > 76 then summary = string.sub(summary, 1, 73) .. "..." end
+        self.selectedSummaryText:SetText("Selected (" .. tostring(table.getn(selected))
+            .. "): " .. (summary ~= "" and summary or "none"))
+    end
     if ARC.Bundles.active then
         self.cancel:SetText("Cancel Active")
         self.cancel:Enable()
@@ -469,7 +583,8 @@ function BundleConfig:Initialize()
     self.rows = {}
     self.selected = {}
     self.selectionOrder = {}
-    self.spellIDs = sortedSpellIDs()
+    self.filter = ""
+    self.spellIDs = sortedSpellIDs(self.filter)
     self.spellPage = 1
     local profile = ARC.db.profile.bundleUI
 
@@ -513,7 +628,8 @@ function BundleConfig:Initialize()
 
     frame.subtitle = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     frame.subtitle:SetPoint("TOPLEFT", frame.title, "BOTTOMLEFT", 0, -5)
-    frame.subtitle:SetText("Save spells in prompt order; use ^ and v to change their sequence")
+    frame.subtitle:SetText(
+        "Choose cooldowns; ARC selects ready players and queues each player's prompts in this order")
     frame.subtitle:SetTextColor(0.58, 0.50, 0.72)
 
     frame.close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
@@ -552,6 +668,27 @@ function BundleConfig:Initialize()
     self.bundleText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     self.bundleText:SetPoint("LEFT", self.nextBundle, "RIGHT", 8, 0)
 
+    frame.searchLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    frame.searchLabel:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -184, -66)
+    frame.searchLabel:SetText("Search:")
+
+    self.searchBox = CreateFrame("EditBox", nil, frame)
+    self.searchBox:SetWidth(140)
+    self.searchBox:SetHeight(22)
+    self.searchBox:SetPoint("LEFT", frame.searchLabel, "RIGHT", 7, 0)
+    self.searchBox:SetAutoFocus(false)
+    self.searchBox:SetFontObject(GameFontHighlightSmall)
+    self.searchBox:SetTextInsets(6, 6, 0, 0)
+    setBackdrop(self.searchBox, { 0.008, 0.012, 0.020, 0.96 }, { 0.24, 0.46, 0.62, 1 })
+    self.searchBox:SetScript("OnEscapePressed", function(editBox) editBox:ClearFocus() end)
+    self.searchBox:SetScript("OnEnterPressed", function(editBox) editBox:ClearFocus() end)
+    self.searchBox:SetScript("OnTextChanged", function(editBox)
+        self.filter = editBox:GetText() or ""
+        self.spellIDs = sortedSpellIDs(self.filter)
+        self.spellPage = 1
+        self:Refresh()
+    end)
+
     frame.nameLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     frame.nameLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -96)
     frame.nameLabel:SetText("Bundle name:")
@@ -566,11 +703,39 @@ function BundleConfig:Initialize()
     setBackdrop(self.nameBox, { 0.008, 0.012, 0.020, 0.96 }, { 0.30, 0.20, 0.44, 1 })
     self.nameBox:SetScript("OnEscapePressed", function(editBox) editBox:ClearFocus() end)
     self.nameBox:SetScript("OnEnterPressed", function(editBox) editBox:ClearFocus() end)
+    self.nameBox:SetScript("OnTextChanged", function()
+        if not self.refreshingName then
+            self.dirty = true
+            self:Refresh()
+        end
+    end)
+
+    self.selectedSummary = CreateFrame("Frame", nil, frame)
+    self.selectedSummary:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -119)
+    self.selectedSummary:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -12, -119)
+    self.selectedSummary:SetHeight(20)
+    self.selectedSummary:EnableMouse(true)
+    setBackdrop(
+        self.selectedSummary,
+        { 0.025, 0.045, 0.062, 0.88 },
+        { 0.16, 0.42, 0.58, 0.90 })
+    self.selectedSummaryText = self.selectedSummary:CreateFontString(
+        nil, "OVERLAY", "GameFontHighlightSmall")
+    self.selectedSummaryText:SetPoint("LEFT", self.selectedSummary, "LEFT", 6, 0)
+    self.selectedSummaryText:SetPoint("RIGHT", self.selectedSummary, "RIGHT", -6, 0)
+    self.selectedSummaryText:SetJustifyH("LEFT")
+    self.selectedSummaryText:SetTextColor(0.62, 0.82, 0.94)
+    self.selectedSummary:SetScript("OnEnter", function(owner)
+        self:ShowSelectedTooltip(owner)
+    end)
+    self.selectedSummary:SetScript("OnLeave", function()
+        if GameTooltip then GameTooltip:Hide() end
+    end)
 
     self.listPanel = CreateFrame("Frame", nil, frame)
-    self.listPanel:SetPoint("TOPLEFT", frame, "TOPLEFT", 7, -123)
-    self.listPanel:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -7, -123)
-    self.listPanel:SetHeight(402)
+    self.listPanel:SetPoint("TOPLEFT", frame, "TOPLEFT", 7, -145)
+    self.listPanel:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -7, -145)
+    self.listPanel:SetHeight(380)
     setBackdrop(self.listPanel, { 0.020, 0.024, 0.034, 0.72 }, { 0.25, 0.16, 0.36, 0.92 })
 
     self.previousPage = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
@@ -617,6 +782,9 @@ function BundleConfig:Initialize()
     self.delete:SetText("Delete")
     self.delete:SetScript("OnClick", function() self:DeleteBundle() end)
 
+    self.dirtyText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    self.dirtyText:SetPoint("BOTTOM", frame, "BOTTOM", 35, 15)
+
     self.cancel = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
     self.cancel:SetWidth(100)
     self.cancel:SetHeight(22)
@@ -648,6 +816,9 @@ function BundleConfig:Initialize()
 end
 
 function BundleConfig:Show()
+    if ARC.OfficerConfig and ARC.OfficerConfig.frame then
+        return ARC.OfficerConfig:Show("bundles")
+    end
     if not ARC:RequireConfigurationAuthority() then return false end
     self:Refresh()
     self.frame:Show()
@@ -655,6 +826,9 @@ function BundleConfig:Show()
 end
 
 function BundleConfig:Toggle()
+    if ARC.OfficerConfig and ARC.OfficerConfig.frame then
+        return ARC.OfficerConfig:Toggle("bundles")
+    end
     if self.frame:IsShown() then
         self.frame:Hide()
         return false

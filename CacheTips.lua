@@ -485,10 +485,12 @@ function CacheTips:Create()
             or not arc:HasConfigurationAuthority() then
             return
         end
-        if arc.CommanderConfig and arc.CommanderConfig.Toggle then
+        if arc.OfficerConfig and arc.OfficerConfig.Toggle then
+            arc.OfficerConfig:Toggle("plans")
+        elseif arc.CommanderConfig and arc.CommanderConfig.Toggle then
             arc.CommanderConfig:Toggle()
         elseif arc.Print then
-            arc:Print("commander configuration is unavailable")
+            arc:Print("officer configuration is unavailable")
         end
     end)
     arcOfficerConfig:Hide()

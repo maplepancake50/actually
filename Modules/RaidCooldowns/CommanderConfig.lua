@@ -1,9 +1,9 @@
 local ARC = Actually.Modules.RaidCooldowns
 local CommanderConfig = ARC:NewModule("CommanderConfig")
 
-local PAGE_SIZE = 7
-local ROW_HEIGHT = 48
-local ROW_GAP = 3
+local PAGE_SIZE = 8
+local ROW_HEIGHT = 43
+local ROW_GAP = 2
 
 local BACKDROP = {
     bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
@@ -20,6 +20,10 @@ end
 
 local function trim(value)
     return string.gsub(string.gsub(tostring(value or ""), "^%s+", ""), "%s+$", "")
+end
+
+local function normalizedName(value)
+    return string.lower(trim(value))
 end
 
 local function copyArray(source)
@@ -74,35 +78,38 @@ function CommanderConfig:GetSelectionIndex(bundleID)
 end
 
 function CommanderConfig:SyncEditingPlan()
-    local plans = ARC.Commander:GetPlans()
-    local plan = self.editingIndex and plans[self.editingIndex]
-    if not plan then return false end
-    if ARC.Commander.activePlanID == plan.id then
-        ARC:Print("cancel the active command before changing its stages")
-        return false
+    self.dirty = true
+    return true
+end
+
+function CommanderConfig:PruneMissingSelections(bundles)
+    local valid = {}
+    for _, bundle in ipairs(bundles or {}) do
+        if bundle.id then valid[bundle.id] = true end
     end
-    local stages = {}
+    local kept, removed = {}, 0
     for _, bundleID in ipairs(self.selectionOrder or {}) do
-        local bundle = ARC.Commander:FindBundle(bundleID)
-        if bundle then
-            table.insert(stages, {
-                bundleID = bundle.id,
-                name = tostring(bundle.name or "Cooldown stage"),
-                spells = copyArray(bundle.spells),
-            })
+        if valid[bundleID] then
+            table.insert(kept, bundleID)
+        else
+            self.selected[bundleID] = nil
+            removed = removed + 1
         end
     end
-    plan.stages = stages
-    ARC.Commander.progress[plan.id] = 1
-    ARC.Commander:Refresh()
-    return true
+    if removed > 0 then
+        self.selectionOrder = kept
+        self.missingStageCount = (self.missingStageCount or 0) + removed
+        self.dirty = true
+    end
+    return removed
 end
 
 function CommanderConfig:SetSelected(bundleID, selected)
     if not bundleID then return end
     local plans = ARC.Commander:GetPlans()
     local editing = self.editingIndex and plans[self.editingIndex]
-    if editing and ARC.Commander.activePlanID == editing.id then
+    if editing and (ARC.Commander:IsPlanActive(editing.id)
+        or ARC.Commander:IsPlanPending(editing.id)) then
         ARC:Print("cancel the active command before changing its stages")
         self:Refresh()
         return
@@ -121,6 +128,14 @@ function CommanderConfig:SetSelected(bundleID, selected)
 end
 
 function CommanderConfig:MoveSelected(bundleID, direction)
+    local plans = ARC.Commander:GetPlans()
+    local editing = self.editingIndex and plans[self.editingIndex]
+    if editing and (ARC.Commander:IsPlanActive(editing.id)
+        or ARC.Commander:IsPlanPending(editing.id)) then
+        ARC:Print("cancel the active command before changing its stages")
+        self:Refresh()
+        return
+    end
     local current = self:GetSelectionIndex(bundleID)
     if not current then return end
     local target = math.max(1, math.min(table.getn(self.selectionOrder), current + direction))
@@ -135,37 +150,18 @@ function CommanderConfig:NewPlan()
     self.editingIndex = nil
     self.selected = {}
     self.selectionOrder = {}
-    self.nameBox:SetText("")
+    self.missingStageCount = 0
+    self.dirty = false
+    self:SetNameText("")
     self.nameBox:ClearFocus()
     self.page = 1
     self:Refresh()
 end
 
 function CommanderConfig:CreatePlan()
-    local plans = ARC.Commander:GetPlans()
-    if table.getn(plans) >= ARC.Constants.MAX_COMMAND_PLANS then
-        ARC:Print("command bar supports at most "
-            .. tostring(ARC.Constants.MAX_COMMAND_PLANS) .. " saved buttons")
-        return nil
-    end
-    local index = table.getn(plans) + 1
-    local plan = {
-        id = newID(),
-        name = "New Command " .. tostring(index),
-        stages = {},
-    }
-    plans[index] = plan
-    self.editingIndex = index
-    self.selected = {}
-    self.selectionOrder = {}
-    self.nameBox:SetText(plan.name)
-    self.nameBox:ClearFocus()
-    self.page = 1
-    ARC.Commander.progress[plan.id] = 1
-    ARC.Commander:Refresh()
-    self:Refresh()
-    ARC:Print("created " .. plan.name .. "; tick a stage bundle to add it to the commander bar")
-    return plan
+    self:NewPlan()
+    ARC:Print("new command draft started; choose bundles, enter a name, then press Save")
+    return true
 end
 
 function CommanderConfig:LoadPlan(index)
@@ -176,16 +172,20 @@ function CommanderConfig:LoadPlan(index)
     self.editingIndex = index
     self.selected = {}
     self.selectionOrder = {}
+    self.missingStageCount = 0
     for _, stage in ipairs(plan.stages or {}) do
         if stage.bundleID and ARC.Commander:FindBundle(stage.bundleID)
             and not self.selected[stage.bundleID] then
             self.selected[stage.bundleID] = true
             table.insert(self.selectionOrder, stage.bundleID)
+        elseif stage.bundleID then
+            self.missingStageCount = self.missingStageCount + 1
         end
     end
-    self.nameBox:SetText(plan.name or "")
+    self:SetNameText(plan.name or "")
     self.nameBox:ClearFocus()
     self.page = 1
+    self.dirty = false
     self:Refresh()
 end
 
@@ -196,19 +196,27 @@ function CommanderConfig:SavePlan()
     end
     local plans = ARC.Commander:GetPlans()
     local index = self.editingIndex
-    if not index or not plans[index] then
-        if table.getn(plans) >= ARC.Constants.MAX_COMMAND_PLANS then
-            ARC:Print("command bar supports at most "
-                .. tostring(ARC.Constants.MAX_COMMAND_PLANS) .. " saved buttons")
-            return nil
-        end
-        index = table.getn(plans) + 1
-        plans[index] = { id = newID() }
+    local existing = index and plans[index]
+    if existing and (ARC.Commander:IsPlanActive(existing.id)
+        or ARC.Commander:IsPlanPending(existing.id)) then
+        ARC:Print("cancel the active command before saving changes to it")
+        return nil
     end
-    local plan = plans[index]
+    if not existing and table.getn(plans) >= ARC.Constants.MAX_COMMAND_PLANS then
+        ARC:Print("command bar supports at most "
+            .. tostring(ARC.Constants.MAX_COMMAND_PLANS) .. " saved buttons")
+        return nil
+    end
+    index = existing and index or (table.getn(plans) + 1)
     local name = trim(self.nameBox:GetText())
     if name == "" then name = "Cooldown Command " .. tostring(index) end
     if string.len(name) > 48 then name = string.sub(name, 1, 48) end
+    for otherIndex, other in ipairs(plans) do
+        if otherIndex ~= index and normalizedName(other.name) == normalizedName(name) then
+            ARC:Print("a command named " .. name .. " already exists; choose a unique name")
+            return nil
+        end
+    end
     local stages = {}
     for _, bundleID in ipairs(self.selectionOrder) do
         local bundle = ARC.Commander:FindBundle(bundleID)
@@ -224,9 +232,13 @@ function CommanderConfig:SavePlan()
         ARC:Print("none of the selected stage bundles still exist")
         return nil
     end
+    local plan = existing or { id = newID() }
     plan.name, plan.stages = name, stages
+    plans[index] = plan
     self.editingIndex = index
-    self.nameBox:SetText(name)
+    self:SetNameText(name)
+    self.dirty = false
+    self.missingStageCount = 0
     ARC.Commander.progress[plan.id] = 1
     ARC.Commander:Refresh()
     ARC:Print("saved command " .. name .. " with "
@@ -239,7 +251,7 @@ function CommanderConfig:DeletePlan()
     local plans = ARC.Commander:GetPlans()
     if not self.editingIndex or not plans[self.editingIndex] then return end
     local plan = plans[self.editingIndex]
-    if ARC.Commander.activePlanID == plan.id then
+    if ARC.Commander:IsPlanActive(plan.id) or ARC.Commander:IsPlanPending(plan.id) then
         ARC:Print("cancel the active command before deleting it")
         return
     end
@@ -252,6 +264,12 @@ function CommanderConfig:DeletePlan()
     else
         self:NewPlan()
     end
+end
+
+function CommanderConfig:SetNameText(value)
+    self.refreshingName = true
+    self.nameBox:SetText(value or "")
+    self.refreshingName = false
 end
 
 function CommanderConfig:CreateRow(index)
@@ -333,6 +351,8 @@ end
 function CommanderConfig:Refresh()
     if not self.frame then return end
     local plans = ARC.Commander:GetPlans()
+    local bundles = ARC.Commander:GetBundles()
+    self:PruneMissingSelections(bundles)
     local planCount = table.getn(plans)
     if self.editingIndex and not plans[self.editingIndex] then self.editingIndex = nil end
     if self.editingIndex then
@@ -340,13 +360,33 @@ function CommanderConfig:Refresh()
     else
         self.planText:SetText("New command  (" .. tostring(planCount) .. " saved)")
     end
+    if self.dirtyText then
+        if (self.missingStageCount or 0) > 0 then
+            self.dirtyText:SetText("MISSING "
+                .. tostring(self.missingStageCount) .. " STAGE"
+                .. (self.missingStageCount == 1 and "" or "S"))
+            self.dirtyText:SetTextColor(1.00, 0.30, 0.25)
+            self.dirtyText:Show()
+        elseif not self.editingIndex then
+            self.dirtyText:SetText("NEW - NOT SAVED")
+            self.dirtyText:SetTextColor(1.00, 0.70, 0.20)
+            self.dirtyText:Show()
+        elseif self.dirty then
+            self.dirtyText:SetText("UNSAVED CHANGES")
+            self.dirtyText:SetTextColor(1.00, 0.70, 0.20)
+            self.dirtyText:Show()
+        else
+            self.dirtyText:SetText("SAVED")
+            self.dirtyText:SetTextColor(0.35, 1.00, 0.35)
+            self.dirtyText:Show()
+        end
+    end
     if self.editingIndex and self.editingIndex > 1 then self.previousPlan:Enable()
     else self.previousPlan:Disable() end
     if (self.editingIndex and self.editingIndex < planCount)
         or (not self.editingIndex and planCount > 0) then self.nextPlan:Enable()
     else self.nextPlan:Disable() end
 
-    local bundles = ARC.Commander:GetBundles()
     local pages = math.max(1, math.ceil(table.getn(bundles) / PAGE_SIZE))
     self.page = math.max(1, math.min(self.page or 1, pages))
     local first = ((self.page - 1) * PAGE_SIZE) + 1
@@ -395,7 +435,7 @@ function CommanderConfig:Initialize()
 
     local frame = CreateFrame("Frame", "ActuallyARCCommanderConfigFrame", UIParent)
     frame:SetWidth(530)
-    frame:SetHeight(548)
+    frame:SetHeight(602)
     frame:SetPoint(profile.point or "CENTER", UIParent, profile.point or "CENTER",
         profile.x or 0, profile.y or 0)
     frame:SetFrameStrata("DIALOG")
@@ -444,6 +484,10 @@ function CommanderConfig:Initialize()
     self.planText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     self.planText:SetPoint("LEFT", self.nextPlan, "RIGHT", 8, 0)
 
+    self.dirtyText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    self.dirtyText:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -12, -67)
+    self.dirtyText:SetJustifyH("RIGHT")
+
     frame.nameLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     frame.nameLabel:SetPoint("TOPLEFT", frame, "TOPLEFT", 12, -98)
     frame.nameLabel:SetText("Button name:")
@@ -458,16 +502,22 @@ function CommanderConfig:Initialize()
     setBackdrop(self.nameBox, { 0.008, 0.014, 0.024, 0.98 }, { 0.14, 0.42, 0.58, 1 })
     self.nameBox:SetScript("OnEscapePressed", function(editBox) editBox:ClearFocus() end)
     self.nameBox:SetScript("OnEnterPressed", function(editBox) editBox:ClearFocus() end)
+    self.nameBox:SetScript("OnTextChanged", function()
+        if not self.refreshingName then
+            self.dirty = true
+            self:Refresh()
+        end
+    end)
 
     self.listPanel = CreateFrame("Frame", nil, frame)
     self.listPanel:SetPoint("TOPLEFT", frame, "TOPLEFT", 7, -126)
     self.listPanel:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -7, -126)
-    self.listPanel:SetHeight(366)
+    self.listPanel:SetHeight(380)
     setBackdrop(self.listPanel, { 0.015, 0.024, 0.036, 0.82 }, { 0.12, 0.34, 0.46, 0.94 })
 
     self.empty = self.listPanel:CreateFontString(nil, "OVERLAY", "GameFontDisable")
     self.empty:SetPoint("CENTER", self.listPanel, "CENTER", 0, 0)
-    self.empty:SetText("No stage bundles saved.\nUse /act arc bundles first.")
+    self.empty:SetText("No cooldown bundles saved.\nBuild and save one in the left panel.")
 
     self.previousPage = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
     self.previousPage:SetWidth(50)
@@ -519,6 +569,9 @@ function CommanderConfig:Initialize()
 end
 
 function CommanderConfig:Show()
+    if ARC.OfficerConfig and ARC.OfficerConfig.frame then
+        return ARC.OfficerConfig:Show("plans")
+    end
     if not ARC:RequireConfigurationAuthority() then return false end
     self:Refresh()
     self.frame:Show()
@@ -526,6 +579,9 @@ function CommanderConfig:Show()
 end
 
 function CommanderConfig:Toggle()
+    if ARC.OfficerConfig and ARC.OfficerConfig.frame then
+        return ARC.OfficerConfig:Toggle("plans")
+    end
     if self.frame:IsShown() then
         self.frame:Hide()
         return false

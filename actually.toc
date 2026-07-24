@@ -52,7 +52,9 @@ Modules\RaidCooldowns\Commander.lua
 Modules\RaidCooldowns\UserList.lua
 Modules\RaidCooldowns\BundleConfig.lua
 Modules\RaidCooldowns\CommanderConfig.lua
+Modules\RaidCooldowns\OfficerConfig.lua
 Modules\RaidCooldowns\SpellConfig.lua
+Modules\RaidCooldowns\SpecAPIProbe.lua
 Modules\RaidCooldowns\TestUI.lua
 Modules\RaidCooldowns\SpoofTest.lua
 Modules\RaidCooldowns\TestMode.lua

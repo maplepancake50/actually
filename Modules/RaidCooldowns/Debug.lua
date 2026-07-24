@@ -290,9 +290,9 @@ end
 
 function Debug:Help()
     if ARC:HasCommandAuthority() then
-        ARC:Print("/arc commands: commander [config], config, bundles, ui, spoof, probe, apiprobe <id>, findhidden, scan, state, peers, request, test, debug, dumpbook [filter], dumptalents [filter]")
+        ARC:Print("/arc commands: commander [config], config, bundles, ui, spoof, specprobe, probe, apiprobe <id>, findhidden, scan, state, peers, request, test, debug, dumpbook [filter], dumptalents [filter]")
     else
-        ARC:Print("/arc commands: ui, scan, state, peers, request")
+        ARC:Print("/arc commands: ui, specprobe, scan, state, peers, request")
     end
 end
 
@@ -349,6 +349,13 @@ function Debug:Handle(input)
     elseif command == "spoof" then
         local shown = ARC.SpoofTest:Toggle()
         ARC:Print("SpoofTest " .. (shown and "shown" or "hidden"))
+    elseif command == "specprobe" then
+        if ARC.SpecAPIProbe and ARC.SpecAPIProbe.Toggle then
+            local shown = ARC.SpecAPIProbe:Toggle()
+            ARC:Print("spec API probe " .. (shown and "shown" or "hidden"))
+        else
+            ARC:Print("SpecAPIProbe unavailable; fully restart the game client")
+        end
     elseif command == "probe" then self:Probe()
     elseif command == "apiprobe" then self:APIProbe(argument)
     elseif command == "scan" then ARC.Spellbook:Scan("manual"); ARC:Print("scan complete")

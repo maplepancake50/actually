@@ -82,6 +82,13 @@ ARC.Defaults = {
             x = 0,
             y = 0,
         },
+        officerConfigUI = {
+            point = "CENTER",
+            relativePoint = "CENTER",
+            x = 0,
+            y = 0,
+            scale = 1,
+        },
         commandPlans = {},
         commanderProgress = {},
         spells = {},

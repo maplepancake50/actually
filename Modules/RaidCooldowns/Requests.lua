@@ -48,13 +48,14 @@ function Automation:Acquire(callback)
     if type(callback) ~= "function" then return false end
     local now = ARC:Now()
     local selfKey = ARC.Roster:GetPlayer()
-    if self:HasLocalLease() then callback() return true end
+    if self:HasLocalLease() then callback(true) return true end
     if self.lease and not self.lease.provisional
         and (self.lease.expiresAt or 0) > now
         and self.lease.ownerKey ~= selfKey then
         ARC:Print("cooldown command already controlled by "
             .. automationShortName(ARC.State.players[self.lease.ownerKey]
                 or ARC.Roster.byKey[self.lease.ownerKey]))
+        callback(false, "another coordinator already controls ARC")
         return false
     end
 
@@ -71,14 +72,26 @@ function Automation:Acquire(callback)
         local lease = Automation.lease
         if not lease or lease.token ~= token or lease.ownerKey ~= selfKey then
             ARC:Print("cooldown command yielded to another coordinator")
+            callback(false, "another coordinator won the command lease")
             return
         end
         lease.provisional = false
         lease.expiresAt = ARC:Now() + ARC.Constants.LEASE_DURATION
         Automation.nextLeaseHeartbeat = 0
         ARC.Comms:SendLeaseHold(token, ARC.Constants.LEASE_DURATION)
-        callback()
+        callback(true)
     end, ARC.Constants.LEASE_CLAIM_WINDOW)
+    return true
+end
+
+function Automation:AbortProvisionalAcquire()
+    local lease = self.lease
+    if not lease or not lease.provisional
+        or lease.ownerKey ~= ARC.Roster:GetPlayer() then
+        return false
+    end
+    self.lease = nil
+    ARC.Comms:SendLeaseRelease(lease.token)
     return true
 end
 
@@ -450,8 +463,8 @@ function Requests:Start(playerKey, spellID, leaseReady)
         return false
     end
     if not leaseReady and not ARC.Automation:HasLocalLease() then
-        return ARC.Automation:Acquire(function()
-            Requests:Start(playerKey, spellID, true)
+        return ARC.Automation:Acquire(function(acquired)
+            if acquired then Requests:Start(playerKey, spellID, true) end
         end)
     end
     if self.outgoing then self:CancelOutgoing("replaced by a new request", true) end

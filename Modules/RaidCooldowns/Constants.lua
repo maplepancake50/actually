@@ -103,7 +103,8 @@ end
 function ARC:EnforceAuthorityVisibility()
     if self:HasCommandAuthority() then return true end
     for _, moduleName in ipairs({
-        "Commander", "CommanderConfig", "BundleConfig", "SpellConfig", "UserList",
+        "Commander", "CommanderConfig", "BundleConfig", "OfficerConfig",
+        "SpellConfig", "UserList",
     }) do
         local module = self[moduleName]
         if module and module.frame and module.frame:IsShown() then module.frame:Hide() end
