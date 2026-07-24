@@ -104,34 +104,9 @@ function Roster:IsGrouped()
 end
 
 function Roster:IsCoordinator(identity)
-    if not identity or not identity.unit or not UnitExists(identity.unit) then return false end
-    local raidCount = GetNumRaidMembers and GetNumRaidMembers() or 0
-    if raidCount > 0 then
-        local raidIndex = tonumber(string.match(identity.unit, "^raid(%d+)$"))
-        if raidIndex and GetRaidRosterInfo then
-            local _, rank = GetRaidRosterInfo(raidIndex)
-            if tonumber(rank) and rank >= 1 then return true end
-        end
-        if UnitIsRaidLeader and UnitIsRaidLeader(identity.unit) then return true end
-        if UnitIsRaidOfficer and UnitIsRaidOfficer(identity.unit) then return true end
-        return false
-    end
-
-    local partyCount = GetNumPartyMembers and GetNumPartyMembers() or 0
-    if partyCount > 0 then
-        if UnitIsPartyLeader and UnitIsPartyLeader(identity.unit) then return true end
-        if GetPartyLeaderIndex then
-            local leaderIndex = GetPartyLeaderIndex()
-            if identity.unit == "player" then return leaderIndex == 0 end
-            local partyIndex = tonumber(string.match(identity.unit, "^party(%d+)$"))
-            return partyIndex ~= nil and partyIndex == leaderIndex
-        end
-        return false
-    end
-    return identity.unit == "player"
+    return identity ~= nil and ARC:HasCommandAuthority(identity) or false
 end
 
 function Roster:IsLocalCoordinator()
-    local _, identity = self:GetPlayer()
-    return self:IsCoordinator(identity)
+    return ARC:HasCommandAuthority()
 end

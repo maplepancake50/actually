@@ -96,6 +96,7 @@ function Renderer:OnUpdate(elapsed)
     self.elapsed = self.elapsed + elapsed
     if self.elapsed < ARC.Constants.UI_UPDATE_INTERVAL then return end
     self.elapsed = 0
+    if ARC.EnforceAuthorityVisibility then ARC:EnforceAuthorityVisibility() end
     local now = ARC:Now()
     local needsReconcile = self.dirty
     for _, spells in pairs(self.rows) do
@@ -366,7 +367,9 @@ function AlertUI:UpdateVisual(frame, now)
     if profile.glow then
         frame.glow:Show()
         local glowWave = 0.5 + 0.5 * math.sin(now * 6)
-        local glowSize = 172 + glowWave * 12
+        -- UI-ActionButton-Border has substantial transparent padding. This
+        -- larger texture size places its visible ring on the 128px icon edge.
+        local glowSize = 220 + glowWave * 10
         frame.glow:SetWidth(glowSize)
         frame.glow:SetHeight(glowSize)
         frame.glow:SetAlpha(0.70 + glowWave * 0.30)
@@ -392,8 +395,8 @@ local function createVisualFrame(name)
     local glow = frame:CreateTexture(nil, "OVERLAY")
     glow:SetTexture("Interface\\Buttons\\UI-ActionButton-Border")
     glow:SetPoint("CENTER", frame, "CENTER", 0, -5)
-    glow:SetWidth(178)
-    glow:SetHeight(178)
+    glow:SetWidth(225)
+    glow:SetHeight(225)
     glow:SetBlendMode("ADD")
     glow:SetVertexColor(1.00, 0.72, 0.08, 1.00)
     frame.glow = glow

@@ -15,8 +15,11 @@ local TYPING_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetTyping"
 local THOUGHT_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetThoughts"
 local CROW_LAUNCH_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetCrowLaunch"
 local DEATH_GRIP_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetDeathGrip"
+local LIFE_GRIP_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetLifeGrip"
+local LIFE_GRIP_WINGS_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetLifeGripWings"
 local LEVITATE_CLOUD_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetLevitateCloud"
 local MERCENARY_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetMercenary"
+local SIGH_SHEET = "Interface\\AddOns\\actually\\Textures\\ActuallyPetSigh"
 local SPEECH_BUBBLE_TEXTURE = "Interface\\AddOns\\actually\\Textures\\ActuallyPetSpeechBubble"
 local ACTION_BOX_TEXTURE = "Interface\\AddOns\\actually\\Textures\\ActuallyPetActionBox"
 local RAPID_CLICK_COUNT = 5
@@ -24,12 +27,33 @@ local RAPID_CLICK_WINDOW = 1.75
 local CROW_RETURN_DELAY = 6
 local DEATH_GRIP_RETURN_DELAY = 6
 local CROW_EFFECT_TIME_SCALE = 1.3
+-- The grip sheets devote part of their width to the caster-side energy bloom.
+-- Put that entire end well beyond the screen edge, even while a tether spans
+-- the full display, so only the reaching hand and line can enter the viewport.
+local GRIP_SOURCE_MARGIN_FACTOR = 0.65
+local GRIP_SOURCE_MIN_MARGIN = 420
+local GRIP_SEGMENT_MAX_WIDTH = 300
+local GRIP_SEGMENT_HEIGHT = 112
+local GRIP_HAND_WIDTH = 150
+local GRIP_LINE_TEX_LEFT = 0.18
+local GRIP_LINE_TEX_RIGHT = 0.82
+local GRIP_HAND_TEX_LEFT = 0.76
 local CLICK_CHATTER_COOLDOWN = 2
 local IDLE_SLEEP_DELAY = 60
 local MERCENARY_SPELL_ID = 9930874
 local MERCENARY_SPELL_NAME = "mercenaryforhire"
 -- Showcase the detailed equipment/spell poses long enough to read clearly.
 local INSPECT_DURATION_SCALE = 3.75
+
+local function GripSourceX(screenWidth, direction)
+    local margin = math.max(
+        GRIP_SOURCE_MIN_MARGIN,
+        screenWidth * GRIP_SOURCE_MARGIN_FACTOR)
+    if direction < 0 then
+        return -margin
+    end
+    return screenWidth + margin
+end
 
 local ANIMATIONS = {
     blink = {
@@ -79,9 +103,10 @@ local ANIMATIONS = {
         frames = { 1, 15, 16, 15, 1 },
         durations = { 0.14, 0.24, 0.34, 0.24, 0.12 },
     },
-    confusedLanding = {
-        frames = { 13, 4, 13, 4, 1 },
-        durations = { 0.24, 0.30, 0.34, 0.28, 0.14 },
+    returnSigh = {
+        sheet = "sigh",
+        frames = { 1, 2, 3, 3, 4 },
+        durations = { 0.18, 0.26, 0.42, 0.28, 0.20 },
     },
     browReaction = {
         frames = { 1, 4, 1, 13, 14, 1 },
@@ -189,7 +214,7 @@ local EMOTE_TEST_ORDER = {
     "perky",
     "sideEye",
     "deadpan",
-    "confusedLanding",
+    "returnSigh",
     "browReaction",
     "brightReaction",
     "dozyBlink",
@@ -223,7 +248,7 @@ local EMOTE_TEST_LABELS = {
     perky = "Perky",
     sideEye = "Side Eye",
     deadpan = "Deadpan",
-    confusedLanding = "Confused After Impact",
+    returnSigh = "Relieved Return Sigh",
     browReaction = "Eyebrow Reaction",
     brightReaction = "Bright Reaction",
     dozyBlink = "Dozy Blink",
@@ -419,14 +444,16 @@ function Pet:SetSpriteFrame(frameNumber)
         return
     end
 
+    local columns = self.currentSheet == "sigh" and 2 or SHEET_COLUMNS
+    local rows = self.currentSheet == "sigh" and 2 or SHEET_ROWS
     local zeroIndex = frameNumber - 1
-    local column = zeroIndex % SHEET_COLUMNS
-    local row = math.floor(zeroIndex / SHEET_COLUMNS)
+    local column = zeroIndex % columns
+    local row = math.floor(zeroIndex / columns)
     self.texture:SetTexCoord(
-        column / SHEET_COLUMNS,
-        (column + 1) / SHEET_COLUMNS,
-        row / SHEET_ROWS,
-        (row + 1) / SHEET_ROWS
+        column / columns,
+        (column + 1) / columns,
+        row / rows,
+        (row + 1) / rows
     )
 end
 
@@ -454,6 +481,7 @@ function Pet:StartMercenaryCast()
     self.isMercenaryCasting = true
     self:CancelCrowLaunch()
     self:CancelDeathGrip()
+    self:CancelGripCombo()
     self:WakeFromIdle()
     self:HideBubble()
     self:HideThought(true)
@@ -508,6 +536,8 @@ function Pet:SetSheet(sheet)
         self.texture:SetTexture(TYPING_SHEET)
     elseif sheet == "mercenary" then
         self.texture:SetTexture(MERCENARY_SHEET)
+    elseif sheet == "sigh" then
+        self.texture:SetTexture(SIGH_SHEET)
     else
         self.texture:SetTexture(MAIN_SHEET)
     end
@@ -583,11 +613,64 @@ function Pet:SetDeathGripFrame(frameNumber, flipped)
 
     local top = (frameNumber - 1) / 4
     local bottom = frameNumber / 4
-    if flipped then
-        self.deathGripTexture:SetTexCoord(1, 0, top, bottom)
-    else
-        self.deathGripTexture:SetTexCoord(0, 1, top, bottom)
+    for _, texture in ipairs(self.deathGripLineTextures or {}) do
+        if flipped then
+            texture:SetTexCoord(
+                GRIP_LINE_TEX_RIGHT, GRIP_LINE_TEX_LEFT, top, bottom)
+        else
+            texture:SetTexCoord(
+                GRIP_LINE_TEX_LEFT, GRIP_LINE_TEX_RIGHT, top, bottom)
+        end
     end
+    if self.deathGripHandTexture then
+        if flipped then
+            self.deathGripHandTexture:SetTexCoord(
+                1, GRIP_HAND_TEX_LEFT, top, bottom)
+        else
+            self.deathGripHandTexture:SetTexCoord(
+                GRIP_HAND_TEX_LEFT, 1, top, bottom)
+        end
+    end
+end
+
+function Pet:SetLifeGripFrame(frameNumber, flipped)
+    if not self.lifeGripTexture then
+        return
+    end
+
+    local top = (frameNumber - 1) / 4
+    local bottom = frameNumber / 4
+    for _, texture in ipairs(self.lifeGripLineTextures or {}) do
+        if flipped then
+            texture:SetTexCoord(
+                GRIP_LINE_TEX_RIGHT, GRIP_LINE_TEX_LEFT, top, bottom)
+        else
+            texture:SetTexCoord(
+                GRIP_LINE_TEX_LEFT, GRIP_LINE_TEX_RIGHT, top, bottom)
+        end
+    end
+    if self.lifeGripHandTexture then
+        if flipped then
+            self.lifeGripHandTexture:SetTexCoord(
+                1, GRIP_HAND_TEX_LEFT, top, bottom)
+        else
+            self.lifeGripHandTexture:SetTexCoord(
+                GRIP_HAND_TEX_LEFT, 1, top, bottom)
+        end
+    end
+end
+
+function Pet:SetLifeGripWingsFrame(frameNumber)
+    if not self.lifeGripWingsTexture then
+        return
+    end
+
+    local zeroIndex = frameNumber - 1
+    local column = zeroIndex % 2
+    local row = math.floor(zeroIndex / 2)
+    self.lifeGripWingsTexture:SetTexCoord(
+        column / 2, (column + 1) / 2,
+        row / 2, (row + 1) / 2)
 end
 
 function Pet:SetLevitateCloudFrame(frameNumber)
@@ -611,18 +694,141 @@ function Pet:SetCrowScreenPosition(x, y)
     self.crowLaunchFrame:SetPoint("CENTER", UIParent, "BOTTOMLEFT", x, y)
 end
 
-function Pet:SetDeathGripTether(edgeX, petX, petY, direction)
+function Pet:EnsureGripSegments(prefix, count, sheet)
+    local framesKey = prefix .. "GripLineFrames"
+    local texturesKey = prefix .. "GripLineTextures"
+    local frames = self[framesKey]
+    local textures = self[texturesKey]
+
+    while #frames < count do
+        local frame = CreateFrame("Frame", nil, UIParent)
+        frame:SetWidth(GRIP_SEGMENT_MAX_WIDTH)
+        frame:SetHeight(GRIP_SEGMENT_HEIGHT)
+        frame:SetFrameStrata("DIALOG")
+        frame:SetFrameLevel(95)
+
+        local texture = frame:CreateTexture(nil, "ARTWORK")
+        texture:SetAllPoints(frame)
+        texture:SetTexture(sheet)
+        frame:Hide()
+
+        table.insert(frames, frame)
+        table.insert(textures, texture)
+    end
+end
+
+function Pet:SetGripEffectVisible(prefix, visible)
+    self[prefix .. "GripVisible"] = visible
+    local frames = self[prefix .. "GripLineFrames"] or {}
+    local activeCount = self[prefix .. "GripActiveSegments"] or 0
+    for index, frame in ipairs(frames) do
+        if visible and index <= activeCount then
+            frame:Show()
+        else
+            frame:Hide()
+        end
+    end
+
+    local handFrame = self[prefix .. "GripHandFrame"]
+    if handFrame then
+        if visible then
+            handFrame:Show()
+        else
+            handFrame:Hide()
+        end
+    end
+end
+
+function Pet:SetGripEffectAlpha(prefix, alpha)
+    for _, frame in ipairs(self[prefix .. "GripLineFrames"] or {}) do
+        frame:SetAlpha(alpha)
+    end
+    local handFrame = self[prefix .. "GripHandFrame"]
+    if handFrame then
+        handFrame:SetAlpha(alpha)
+    end
+end
+
+function Pet:SetDeathGripTether(anchorX, petX, petY, direction)
     if not self.deathGripFrame then
         return
     end
 
-    local width = math.max(96, math.abs(petX - edgeX))
-    self.deathGripFrame:SetWidth(width)
-    self.deathGripFrame:SetHeight(112)
-    self.deathGripFrame:ClearAllPoints()
-    self.deathGripFrame:SetPoint("CENTER", UIParent, "BOTTOMLEFT",
-        (edgeX + petX) / 2, petY)
+    local width = math.max(96, math.abs(petX - anchorX))
+    local segmentCount = math.max(
+        1, math.ceil(width / GRIP_SEGMENT_MAX_WIDTH))
+    self:EnsureGripSegments(
+        "death", segmentCount, DEATH_GRIP_SHEET)
+    self.deathGripActiveSegments = segmentCount
+
+    local segmentWidth = width / segmentCount
+    local left = math.min(anchorX, petX)
+    for index, frame in ipairs(self.deathGripLineFrames) do
+        if index <= segmentCount then
+            frame:SetWidth(segmentWidth + 2)
+            frame:SetHeight(GRIP_SEGMENT_HEIGHT)
+            frame:ClearAllPoints()
+            frame:SetPoint("CENTER", UIParent, "BOTTOMLEFT",
+                left + (index - 0.5) * segmentWidth, petY)
+            if self.deathGripVisible then
+                frame:Show()
+            end
+        else
+            frame:Hide()
+        end
+    end
+
+    local handOffset = GRIP_HAND_WIDTH / 2 - PET_SIZE * 0.4
+    self.deathGripHandFrame:ClearAllPoints()
+    self.deathGripHandFrame:SetPoint("CENTER", UIParent, "BOTTOMLEFT",
+        petX + direction * handOffset, petY)
     self:SetDeathGripFrame(self.deathGripVisualFrame or 1, direction > 0)
+end
+
+function Pet:SetLifeGripTether(anchorX, petX, petY)
+    if not self.lifeGripFrame then
+        return
+    end
+
+    local width = math.max(96, math.abs(petX - anchorX))
+    local segmentCount = math.max(
+        1, math.ceil(width / GRIP_SEGMENT_MAX_WIDTH))
+    self:EnsureGripSegments(
+        "life", segmentCount, LIFE_GRIP_SHEET)
+    self.lifeGripActiveSegments = segmentCount
+
+    local segmentWidth = width / segmentCount
+    local left = math.min(anchorX, petX)
+    for index, frame in ipairs(self.lifeGripLineFrames) do
+        if index <= segmentCount then
+            frame:SetWidth(segmentWidth + 2)
+            frame:SetHeight(GRIP_SEGMENT_HEIGHT)
+            frame:ClearAllPoints()
+            frame:SetPoint("CENTER", UIParent, "BOTTOMLEFT",
+                left + (index - 0.5) * segmentWidth, petY)
+            if self.lifeGripVisible then
+                frame:Show()
+            end
+        else
+            frame:Hide()
+        end
+    end
+
+    local direction = anchorX > petX and 1 or -1
+    local handOffset = GRIP_HAND_WIDTH / 2 - PET_SIZE * 0.4
+    self.lifeGripHandFrame:ClearAllPoints()
+    self.lifeGripHandFrame:SetPoint("CENTER", UIParent, "BOTTOMLEFT",
+        petX + direction * handOffset, petY)
+    self:SetLifeGripFrame(
+        self.lifeGripVisualFrame or 1, direction > 0)
+end
+
+function Pet:SetLifeGripWingsPosition(x, y)
+    if not self.lifeGripWingsFrame then
+        return
+    end
+    self.lifeGripWingsFrame:ClearAllPoints()
+    self.lifeGripWingsFrame:SetPoint("CENTER", UIParent, "BOTTOMLEFT", x, y + 4)
 end
 
 function Pet:SetLevitateCloudPosition(x, y)
@@ -654,9 +860,7 @@ function Pet:CancelDeathGrip()
     end
 
     self.deathGrip = nil
-    if self.deathGripFrame then
-        self.deathGripFrame:Hide()
-    end
+    self:SetGripEffectVisible("death", false)
     if self.levitateCloudFrame then
         self.levitateCloudFrame:Hide()
     end
@@ -666,8 +870,23 @@ function Pet:CancelDeathGrip()
     self:ApplyPosition()
 end
 
+function Pet:CancelGripCombo()
+    if not self.gripCombo then
+        return
+    end
+
+    self.gripCombo = nil
+    self:SetGripEffectVisible("death", false)
+    self:SetGripEffectVisible("life", false)
+    if self.lifeGripWingsFrame then self.lifeGripWingsFrame:Hide() end
+    self.frame:SetAlpha(1)
+    self.frame:SetClampedToScreen(true)
+    self.frame:EnableMouse(true)
+    self:ApplyPosition()
+end
+
 function Pet:TriggerCrowLaunch()
-    if self.crowLaunch or self.deathGrip or not self.crowLaunchFrame then
+    if self.crowLaunch or self.deathGrip or self.gripCombo or not self.crowLaunchFrame then
         return false
     end
     if Addon.Analyzer and Addon.Analyzer.running then
@@ -705,7 +924,7 @@ function Pet:TriggerCrowLaunch()
 end
 
 function Pet:TriggerDeathGrip()
-    if self.crowLaunch or self.deathGrip or not self.deathGripFrame then
+    if self.crowLaunch or self.deathGrip or self.gripCombo or not self.deathGripFrame then
         return false
     end
     if Addon.Analyzer and Addon.Analyzer.running then
@@ -721,12 +940,14 @@ function Pet:TriggerDeathGrip()
     local direction = startX <= screenWidth / 2 and -1 or 1
     local edgeX = direction < 0 and -PET_SIZE * 0.65
         or screenWidth + PET_SIZE * 0.65
+    local sourceX = GripSourceX(screenWidth, direction)
     self.deathGrip = {
         stage = "form",
         elapsed = 0,
         startX = startX,
         startY = startY,
         edgeX = edgeX,
+        sourceX = sourceX,
         direction = direction,
     }
     self.rapidClickCount = 0
@@ -738,15 +959,69 @@ function Pet:TriggerDeathGrip()
     self.frame:EnableMouse(false)
     self.levitateCloudFrame:Hide()
     self.deathGripVisualFrame = 1
-    self.deathGripFrame:SetAlpha(1)
-    self:SetDeathGripTether(edgeX, startX, startY, direction)
-    self.deathGripFrame:Show()
+    self:SetGripEffectAlpha("death", 1)
+    self:SetDeathGripTether(sourceX, startX, startY, direction)
+    self:SetGripEffectVisible("death", true)
+    GameTooltip:Hide()
+    return true
+end
+
+function Pet:TriggerGripCombo()
+    if self.crowLaunch or self.deathGrip or self.gripCombo
+        or not self.deathGripFrame or not self.lifeGripFrame
+        or not self.lifeGripWingsFrame then
+        return false
+    end
+    if Addon.Analyzer and Addon.Analyzer.running then
+        return false
+    end
+
+    local startX, startY = self.frame:GetCenter()
+    if not startX or not startY then
+        return false
+    end
+
+    local screenWidth = UIParent:GetWidth()
+    local nearDirection = startX <= screenWidth / 2 and -1 or 1
+    local nearX = nearDirection < 0 and -PET_SIZE * 0.8
+        or screenWidth + PET_SIZE * 0.8
+    local farX = nearDirection < 0 and screenWidth + PET_SIZE * 0.8
+        or -PET_SIZE * 0.8
+    local nearSourceX = GripSourceX(screenWidth, nearDirection)
+    local farSourceX = GripSourceX(screenWidth, -nearDirection)
+    self.gripCombo = {
+        stage = "deathForm1",
+        elapsed = 0,
+        startX = startX,
+        startY = startY,
+        nearDirection = nearDirection,
+        nearX = nearX,
+        farX = farX,
+        nearSourceX = nearSourceX,
+        farSourceX = farSourceX,
+        petX = startX,
+        petY = startY,
+    }
+
+    self:HideBubble()
+    self:HideThought(true)
+    self:FinishAnimation()
+    self.frame:SetClampedToScreen(false)
+    self.frame:EnableMouse(false)
+    self:SetSheet("sigh")
+    self:SetSpriteFrame(1)
+    self.deathGripVisualFrame = 1
+    self:SetGripEffectAlpha("death", 1)
+    self:SetDeathGripTether(nearSourceX, startX, startY, nearDirection)
+    self:SetGripEffectVisible("death", true)
+    self:SetGripEffectVisible("life", false)
+    self.lifeGripWingsFrame:Hide()
     GameTooltip:Hide()
     return true
 end
 
 function Pet:RegisterRapidClick()
-    if self.crowLaunch or self.deathGrip then
+    if self.crowLaunch or self.deathGrip or self.gripCombo then
         return true
     end
 
@@ -853,7 +1128,7 @@ function Pet:UpdateCrowLaunch(elapsed)
             self.frame:EnableMouse(true)
             self:ApplyPosition()
             self:ResetTimers()
-            self:Play("confusedLanding")
+            self:Play("returnSigh")
         end
     end
 
@@ -871,8 +1146,14 @@ function Pet:UpdateDeathGrip(elapsed)
         local duration = 0.52
         local progress = math.min(grip.elapsed / duration, 1)
         self.deathGripVisualFrame = progress < 0.42 and 1 or 2
-        self:SetDeathGripTether(grip.edgeX, grip.startX, grip.startY, grip.direction)
-        self.deathGripFrame:SetAlpha(math.min(1, progress * 2.8))
+        if progress >= 0.42 then
+            -- Let Arnold register the ghost hand before the actual yank.
+            self:SetSheet("main")
+            self:SetSpriteFrame(13)
+        end
+        self:SetDeathGripTether(grip.sourceX, grip.startX, grip.startY, grip.direction)
+        self:SetGripEffectAlpha(
+            "death", math.min(1, progress * 2.8))
         if progress >= 1 then
             grip.stage = "pull"
             grip.elapsed = 0
@@ -887,23 +1168,24 @@ function Pet:UpdateDeathGrip(elapsed)
         local recoil = math.sin(progress * math.pi * 3) * 7 * (1 - progress)
         local petY = grip.startY + recoil
         self:SetScreenPosition(petX, petY)
-        self:SetDeathGripTether(grip.edgeX, petX, petY, grip.direction)
+        self:SetDeathGripTether(grip.sourceX, petX, petY, grip.direction)
         if progress >= 1 then
             grip.stage = "wait"
             grip.elapsed = 0
             self.deathGripVisualFrame = 4
-            self:SetDeathGripTether(grip.edgeX, targetX, grip.startY, grip.direction)
+            self:SetDeathGripTether(grip.sourceX, targetX, grip.startY, grip.direction)
         end
     elseif grip.stage == "wait" then
         local fadeDuration = 0.55
         if grip.elapsed < fadeDuration then
             self.deathGripVisualFrame = 4
-            self:SetDeathGripTether(grip.edgeX,
+            self:SetDeathGripTether(grip.sourceX,
                 grip.edgeX + grip.direction * PET_SIZE * 0.15,
                 grip.startY, grip.direction)
-            self.deathGripFrame:SetAlpha(1 - grip.elapsed / fadeDuration)
+            self:SetGripEffectAlpha(
+                "death", 1 - grip.elapsed / fadeDuration)
         else
-            self.deathGripFrame:Hide()
+            self:SetGripEffectVisible("death", false)
         end
 
         if grip.elapsed >= DEATH_GRIP_RETURN_DELAY then
@@ -913,6 +1195,8 @@ function Pet:UpdateDeathGrip(elapsed)
             -- upward arc reads as a small hop instead of another flying return.
             grip.returnX = grip.edgeX + grip.direction * PET_SIZE * 0.15
             grip.returnY = grip.startY
+            self:SetSheet("main")
+            self:SetSpriteFrame(1)
             self:SetScreenPosition(grip.returnX, grip.returnY)
             self.levitateCloudFrame:Hide()
         end
@@ -934,14 +1218,178 @@ function Pet:UpdateDeathGrip(elapsed)
         local bounce = math.sin(progress * math.pi) * 9 * (1 - progress)
         self:SetScreenPosition(grip.startX, grip.startY + bounce)
         if progress >= 1 then
-            self.deathGripFrame:Hide()
+            self:SetGripEffectVisible("death", false)
             self.deathGrip = nil
             self.frame:SetAlpha(1)
             self.frame:SetClampedToScreen(true)
             self.frame:EnableMouse(true)
             self:ApplyPosition()
             self:ResetTimers()
-            self:Play("confusedLanding")
+            self:Play("returnSigh")
+        end
+    end
+
+    return true
+end
+
+function Pet:UpdateGripCombo(elapsed)
+    local combo = self.gripCombo
+    if not combo then
+        return false
+    end
+
+    combo.elapsed = combo.elapsed + elapsed
+
+    if combo.stage == "deathForm1" then
+        local progress = math.min(combo.elapsed / 0.52, 1)
+        self.deathGripVisualFrame = progress < 0.42 and 1 or 2
+        if progress >= 0.42 then
+            self:SetSheet("main")
+            self:SetSpriteFrame(13)
+        end
+        self:SetDeathGripTether(combo.nearSourceX, combo.startX,
+            combo.startY, combo.nearDirection)
+        if progress >= 1 then
+            combo.stage = "deathPull1"
+            combo.elapsed = 0
+            self.deathGripVisualFrame = 3
+        end
+    elseif combo.stage == "deathPull1" then
+        local progress = math.min(combo.elapsed / 0.76, 1)
+        local eased = progress * progress * progress
+        combo.petX = combo.startX + (combo.nearX - combo.startX) * eased
+        combo.petY = combo.startY + math.sin(progress * math.pi * 2) * 6 * (1 - progress)
+        self:SetScreenPosition(combo.petX, combo.petY)
+        self:SetDeathGripTether(combo.nearSourceX, combo.petX,
+            combo.petY, combo.nearDirection)
+        if progress >= 1 then
+            combo.stage = "lifeForm1"
+            combo.elapsed = 0
+            self:SetGripEffectVisible("death", false)
+            self:SetSheet("sigh")
+            self:SetSpriteFrame(1)
+            self.lifeGripVisualFrame = 1
+            self:SetGripEffectAlpha("life", 1)
+            self:SetLifeGripTether(combo.farSourceX, combo.petX, combo.petY)
+            self:SetGripEffectVisible("life", true)
+            self:SetLifeGripWingsFrame(1)
+            self.lifeGripWingsFrame:SetAlpha(1)
+            self:SetLifeGripWingsPosition(combo.petX, combo.petY)
+            self.lifeGripWingsFrame:Show()
+        end
+    elseif combo.stage == "lifeForm1" then
+        local progress = math.min(combo.elapsed / 0.48, 1)
+        self.lifeGripVisualFrame = progress < 0.45 and 1 or 2
+        self:SetLifeGripWingsFrame(progress < 0.45 and 1 or 2)
+        self:SetLifeGripTether(combo.farSourceX, combo.petX, combo.petY)
+        self:SetLifeGripWingsPosition(combo.petX, combo.petY)
+        if progress >= 1 then
+            combo.stage = "lifePull1"
+            combo.elapsed = 0
+            self.lifeGripVisualFrame = 3
+            self:SetLifeGripWingsFrame(3)
+        end
+    elseif combo.stage == "lifePull1" then
+        local progress = math.min(combo.elapsed / 1.04, 1)
+        local eased = progress * progress * (3 - 2 * progress)
+        combo.petX = combo.nearX + (combo.farX - combo.nearX) * eased
+        combo.petY = combo.startY + math.sin(progress * math.pi) * 48
+        self:SetScreenPosition(combo.petX, combo.petY)
+        self:SetLifeGripTether(combo.farSourceX, combo.petX, combo.petY)
+        self:SetLifeGripWingsPosition(combo.petX, combo.petY)
+        if progress >= 1 then
+            combo.stage = "deathForm2"
+            combo.elapsed = 0
+            self:SetGripEffectVisible("life", false)
+            self.lifeGripWingsFrame:Hide()
+            self:SetSheet("main")
+            self:SetSpriteFrame(13)
+            self.deathGripVisualFrame = 1
+            self:SetGripEffectAlpha("death", 1)
+            self:SetDeathGripTether(combo.nearSourceX, combo.petX,
+                combo.petY, combo.nearDirection)
+            self:SetGripEffectVisible("death", true)
+        end
+    elseif combo.stage == "deathForm2" then
+        local progress = math.min(combo.elapsed / 0.44, 1)
+        self.deathGripVisualFrame = progress < 0.45 and 1 or 2
+        self:SetDeathGripTether(combo.nearSourceX, combo.petX,
+            combo.petY, combo.nearDirection)
+        if progress >= 1 then
+            combo.stage = "deathPull2"
+            combo.elapsed = 0
+            self.deathGripVisualFrame = 3
+        end
+    elseif combo.stage == "deathPull2" then
+        local progress = math.min(combo.elapsed / 1.02, 1)
+        local eased = progress * progress * (3 - 2 * progress)
+        combo.petX = combo.farX + (combo.nearX - combo.farX) * eased
+        combo.petY = combo.startY - math.sin(progress * math.pi) * 34
+        self:SetScreenPosition(combo.petX, combo.petY)
+        self:SetDeathGripTether(combo.nearSourceX, combo.petX,
+            combo.petY, combo.nearDirection)
+        if progress >= 1 then
+            combo.stage = "lifeForm2"
+            combo.elapsed = 0
+            self:SetGripEffectVisible("death", false)
+            self:SetSheet("sigh")
+            self:SetSpriteFrame(1)
+            self.lifeGripVisualFrame = 1
+            self:SetGripEffectAlpha("life", 1)
+            self:SetLifeGripTether(combo.farSourceX, combo.petX, combo.petY)
+            self:SetGripEffectVisible("life", true)
+            self:SetLifeGripWingsFrame(1)
+            self.lifeGripWingsFrame:SetAlpha(1)
+            self:SetLifeGripWingsPosition(combo.petX, combo.petY)
+            self.lifeGripWingsFrame:Show()
+        end
+    elseif combo.stage == "lifeForm2" then
+        local progress = math.min(combo.elapsed / 0.48, 1)
+        self.lifeGripVisualFrame = progress < 0.45 and 1 or 2
+        self:SetLifeGripWingsFrame(progress < 0.45 and 1 or 2)
+        self:SetLifeGripTether(combo.farSourceX, combo.petX, combo.petY)
+        self:SetLifeGripWingsPosition(combo.petX, combo.petY)
+        if progress >= 1 then
+            combo.stage = "lifePull2"
+            combo.elapsed = 0
+            self.lifeGripVisualFrame = 3
+            self:SetLifeGripWingsFrame(3)
+        end
+    elseif combo.stage == "lifePull2" then
+        local progress = math.min(combo.elapsed / 0.92, 1)
+        local eased = 1 - (1 - progress) * (1 - progress) * (1 - progress)
+        combo.petX = combo.nearX + (combo.startX - combo.nearX) * eased
+        combo.petY = combo.startY + math.sin(progress * math.pi) * 70
+        self:SetScreenPosition(combo.petX, combo.petY)
+        self:SetLifeGripTether(combo.farSourceX, combo.petX, combo.petY)
+        self:SetLifeGripWingsPosition(combo.petX, combo.petY)
+        if progress >= 1 then
+            combo.stage = "landing"
+            combo.elapsed = 0
+            combo.petX = combo.startX
+            combo.petY = combo.startY
+            self.lifeGripVisualFrame = 4
+            self:SetLifeGripWingsFrame(4)
+        end
+    elseif combo.stage == "landing" then
+        local progress = math.min(combo.elapsed / 0.45, 1)
+        local bounce = math.sin(progress * math.pi) * 8 * (1 - progress)
+        self:SetScreenPosition(combo.startX, combo.startY + bounce)
+        self:SetLifeGripTether(combo.farSourceX, combo.startX, combo.startY)
+        self:SetLifeGripWingsPosition(combo.startX, combo.startY)
+        self:SetGripEffectAlpha("life", 1 - progress)
+        self.lifeGripWingsFrame:SetAlpha(1 - progress)
+        if progress >= 1 then
+            self:SetGripEffectVisible("death", false)
+            self:SetGripEffectVisible("life", false)
+            self.lifeGripWingsFrame:Hide()
+            self.gripCombo = nil
+            self.frame:SetAlpha(1)
+            self.frame:SetClampedToScreen(true)
+            self.frame:EnableMouse(true)
+            self:ApplyPosition()
+            self:ResetTimers()
+            self:Play("returnSigh")
         end
     end
 
@@ -981,7 +1429,7 @@ function Pet:PlayTalkingAnimation()
 end
 
 function Pet:CanAcceptLeftClick()
-    if self.crowLaunch or self.deathGrip then
+    if self.crowLaunch or self.deathGrip or self.gripCombo then
         return false
     end
     return not self.animationName or LEFT_CLICK_SAFE_ANIMATIONS[self.animationName] == true
@@ -1063,7 +1511,7 @@ end
 
 function Pet:BeginIdleSleep()
     if self.isIdleSleeping or self.animation or self.isDragging or self.isWatchingChat
-        or self.crowLaunch or self.deathGrip then
+        or self.crowLaunch or self.deathGrip or self.gripCombo then
         return false
     end
     if Addon.Analyzer and Addon.Analyzer.running then
@@ -1220,6 +1668,7 @@ function Pet:StopEmoteTest()
     self.manualEmoteTest = nil
     self:CancelCrowLaunch()
     self:CancelDeathGrip()
+    self:CancelGripCombo()
     self:WakeFromIdle()
     self:HideBubble()
     self:HideThought(true)
@@ -1238,6 +1687,7 @@ function Pet:PlayEmoteTest(name)
 
     self:CancelCrowLaunch()
     self:CancelDeathGrip()
+    self:CancelGripCombo()
     self:WakeFromIdle()
     self:HideBubble()
     self:HideThought(false)
@@ -1423,6 +1873,9 @@ function Pet:Update(elapsed)
     if self:UpdateDeathGrip(elapsed) then
         return
     end
+    if self:UpdateGripCombo(elapsed) then
+        return
+    end
 
     self:UpdateTypingGaze(elapsed)
     if self.isWatchingChat and not self.isDragging and not self.animation then
@@ -1474,6 +1927,7 @@ end
 function Pet:ResetPosition()
     self:CancelCrowLaunch()
     self:CancelDeathGrip()
+    self:CancelGripCombo()
     Addon.db.pet.x = 360
     Addon.db.pet.y = -180
     self:ApplyPosition()
@@ -1500,6 +1954,7 @@ function Pet:Hide(keepAnalyzerOpen)
     end
     self:CancelCrowLaunch()
     self:CancelDeathGrip()
+    self:CancelGripCombo()
     Addon.db.pet.shown = false
     self:HideThought(false)
     self.frame:Hide()
@@ -1587,19 +2042,67 @@ function Pet:CreateCrowLaunchEffect()
 end
 
 function Pet:CreateDeathGripEffect()
+    self.deathGripLineFrames = {}
+    self.deathGripLineTextures = {}
+    self.deathGripActiveSegments = 0
+    self.deathGripVisible = false
+    self:EnsureGripSegments("death", 1, DEATH_GRIP_SHEET)
+
+    local handFrame = CreateFrame("Frame", nil, UIParent)
+    handFrame:SetWidth(GRIP_HAND_WIDTH)
+    handFrame:SetHeight(GRIP_SEGMENT_HEIGHT)
+    handFrame:SetFrameStrata("DIALOG")
+    handFrame:SetFrameLevel(105)
+
+    local handTexture = handFrame:CreateTexture(nil, "ARTWORK")
+    handTexture:SetAllPoints(handFrame)
+    handTexture:SetTexture(DEATH_GRIP_SHEET)
+    handFrame:Hide()
+
+    self.deathGripFrame = self.deathGripLineFrames[1]
+    self.deathGripTexture = self.deathGripLineTextures[1]
+    self.deathGripHandFrame = handFrame
+    self.deathGripHandTexture = handTexture
+end
+
+function Pet:CreateLifeGripEffect()
+    self.lifeGripLineFrames = {}
+    self.lifeGripLineTextures = {}
+    self.lifeGripActiveSegments = 0
+    self.lifeGripVisible = false
+    self:EnsureGripSegments("life", 1, LIFE_GRIP_SHEET)
+
+    local handFrame = CreateFrame("Frame", nil, UIParent)
+    handFrame:SetWidth(GRIP_HAND_WIDTH)
+    handFrame:SetHeight(GRIP_SEGMENT_HEIGHT)
+    handFrame:SetFrameStrata("DIALOG")
+    handFrame:SetFrameLevel(105)
+
+    local handTexture = handFrame:CreateTexture(nil, "ARTWORK")
+    handTexture:SetAllPoints(handFrame)
+    handTexture:SetTexture(LIFE_GRIP_SHEET)
+    handFrame:Hide()
+
+    self.lifeGripFrame = self.lifeGripLineFrames[1]
+    self.lifeGripTexture = self.lifeGripLineTextures[1]
+    self.lifeGripHandFrame = handFrame
+    self.lifeGripHandTexture = handTexture
+end
+
+function Pet:CreateLifeGripWingsEffect()
     local frame = CreateFrame("Frame", nil, UIParent)
-    frame:SetWidth(512)
-    frame:SetHeight(112)
+    frame:SetWidth(236)
+    frame:SetHeight(190)
     frame:SetFrameStrata("DIALOG")
-    frame:SetFrameLevel(95)
+    frame:SetFrameLevel(90)
 
     local texture = frame:CreateTexture(nil, "ARTWORK")
     texture:SetAllPoints(frame)
-    texture:SetTexture(DEATH_GRIP_SHEET)
+    texture:SetTexture(LIFE_GRIP_WINGS_SHEET)
     frame:Hide()
 
-    self.deathGripFrame = frame
-    self.deathGripTexture = texture
+    self.lifeGripWingsFrame = frame
+    self.lifeGripWingsTexture = texture
 end
 
 function Pet:CreateLevitateCloudEffect()
@@ -1704,6 +2207,7 @@ function Pet:GetEmoteTestEntries()
     table.insert(entries, { action = "thought3", label = "Thought: Dice" })
     table.insert(entries, { action = "crowLaunch", label = "Crow Blast / Return" })
     table.insert(entries, { action = "deathGrip", label = "Death Grip / Return" })
+    table.insert(entries, { action = "gripCombo", label = "Death / Life Grip Combo" })
     return entries
 end
 
@@ -1731,6 +2235,9 @@ function Pet:RunEmoteTestEntry(entry)
     elseif entry.action == "deathGrip" then
         self:StopEmoteTest()
         return self:TriggerDeathGrip()
+    elseif entry.action == "gripCombo" then
+        self:StopEmoteTest()
+        return self:TriggerGripCombo()
     end
     return false, "Unknown emote test action."
 end
@@ -1742,7 +2249,7 @@ function Pet:CreateEmoteTestFrame()
 
     local frame = CreateFrame("Frame", "ActuallyArnoldEmoteTestFrame", UIParent)
     frame:SetWidth(680)
-    frame:SetHeight(480)
+    frame:SetHeight(520)
     frame:SetPoint("CENTER", UIParent, "CENTER", 0, 20)
     frame:SetFrameStrata("DIALOG")
     frame:SetFrameLevel(220)
@@ -1891,6 +2398,8 @@ function Pet:Create()
     self:CreateThoughtBubble(button)
     self:CreateCrowLaunchEffect()
     self:CreateDeathGripEffect()
+    self:CreateLifeGripEffect()
+    self:CreateLifeGripWingsEffect()
     self:CreateLevitateCloudEffect()
     self:CreateContextMenu()
     self:CreateSnoreEffect(button)

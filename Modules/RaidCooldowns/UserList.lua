@@ -68,7 +68,7 @@ function UserList:Refresh()
     if not self.frame then return end
     if self.frame:IsShown() and not self:IsAllowed() then
         self.frame:Hide()
-        ARC:Print("user list closed: group leader or raid assistant access is required")
+        ARC:Print("user list closed: actually officer or leader access is required")
         return
     end
 
@@ -120,7 +120,7 @@ end
 
 function UserList:Open()
     if not self:IsAllowed() then
-        ARC:Print("only the group leader or a raid assistant can open the user list")
+        ARC:Print("only an actually officer or the actually leader can open the user list")
         return false
     end
     self.frame:Show()

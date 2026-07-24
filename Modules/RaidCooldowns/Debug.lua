@@ -289,7 +289,11 @@ function Debug:FindHiddenTalents()
 end
 
 function Debug:Help()
-    ARC:Print("/arc commands: commander [config], config, bundles, ui, spoof, probe, apiprobe <id>, findhidden, scan, state, peers, request, test, debug, dumpbook [filter], dumptalents [filter]")
+    if ARC:HasCommandAuthority() then
+        ARC:Print("/arc commands: commander [config], config, bundles, ui, spoof, probe, apiprobe <id>, findhidden, scan, state, peers, request, test, debug, dumpbook [filter], dumptalents [filter]")
+    else
+        ARC:Print("/arc commands: ui, scan, state, peers, request")
+    end
 end
 
 local function canConfigure()
@@ -317,6 +321,8 @@ function Debug:Handle(input)
     elseif command == "commander" then
         if argument ~= "" then
             ARC:Print("usage: /arc commander [config]")
+        elseif not ARC:RequireCommandAuthority() then
+            return
         elseif ARC.Commander and ARC.Commander.Toggle then
             local shown = ARC.Commander:Toggle()
             ARC:Print("commander bar " .. (shown and "shown" or "hidden"))

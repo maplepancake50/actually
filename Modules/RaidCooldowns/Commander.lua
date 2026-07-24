@@ -178,6 +178,7 @@ function Commander:IsPlanActive(planID)
 end
 
 function Commander:StartPlan(planID)
+    if not ARC:RequireCommandAuthority() then return false end
     local plan = self:FindPlan(planID)
     if not plan then ARC:Print("command plan no longer exists") return false end
     if self.pendingPlanID or self.activePlanID or ARC.Bundles.active or ARC.Requests.outgoing then
@@ -359,8 +360,8 @@ function Commander:RefreshButton(button, plan)
         button.glow:Hide()
         button.arcActionable = false
         button:SetBackdropBorderColor(0.22, 0.26, 0.30, 0.92)
-    elseif not ARC.Roster:IsLocalCoordinator() then
-        button.status:SetText("VIEW ONLY - NOT LEADER")
+    elseif not ARC:HasCommandAuthority() then
+        button.status:SetText("OFFICER ACCESS REQUIRED")
         button.status:SetTextColor(0.58, 0.62, 0.68)
         button.stage:SetTextColor(0.58, 0.62, 0.68)
         button.glow:Hide()
@@ -401,6 +402,10 @@ end
 
 function Commander:Refresh()
     if not self.frame then return end
+    if not ARC:HasCommandAuthority() then
+        self.frame:Hide()
+        return
+    end
     local plans = {}
     for _, plan in ipairs(self:GetPlans()) do
         if type(plan.stages) == "table" and table.getn(plan.stages) > 0 then
@@ -541,7 +546,11 @@ function Commander:CreateFrame()
 
     self.frame = frame
     self:ApplyLayoutLock()
-    if profile.shown == false then frame:Hide() else frame:Show() end
+    if profile.shown == false or not ARC:HasCommandAuthority() then
+        frame:Hide()
+    else
+        frame:Show()
+    end
 end
 
 function Commander:Initialize()
@@ -560,16 +569,31 @@ function Commander:OnUpdate(elapsed)
     self.elapsed = (self.elapsed or 0) + (elapsed or 0)
     if self.elapsed < 0.25 then return end
     self.elapsed = 0
+    if not ARC:HasCommandAuthority() then
+        if self.frame then self.frame:Hide() end
+        return
+    elseif ARC.db.profile.commanderUI.shown ~= false and not self.frame:IsShown() then
+        self.frame:Show()
+    end
     self:Refresh()
 end
 
 function Commander:Show()
+    if not ARC:RequireCommandAuthority() then
+        if self.frame then self.frame:Hide() end
+        return false
+    end
     ARC.db.profile.commanderUI.shown = true
     self:Refresh()
     self.frame:Show()
+    return true
 end
 
 function Commander:Toggle()
+    if not ARC:RequireCommandAuthority() then
+        if self.frame then self.frame:Hide() end
+        return false
+    end
     local shown = not self.frame:IsShown()
     ARC.db.profile.commanderUI.shown = shown
     if shown then self:Show() else self.frame:Hide() end

@@ -19,6 +19,10 @@ Textures/*
 !Textures/ActuallyPetCrowLaunch.tga
 !Textures/ActuallyPetDeathGrip.png
 !Textures/ActuallyPetDeathGrip.tga
+!Textures/ActuallyPetLifeGrip.png
+!Textures/ActuallyPetLifeGrip.tga
+!Textures/ActuallyPetLifeGripWings.png
+!Textures/ActuallyPetLifeGripWings.tga
 !Textures/ActuallyPetLevitateCloud.png
 !Textures/ActuallyPetLevitateCloud.tga
 !Textures/ActuallyPetSpeechBubble.png
@@ -31,6 +35,8 @@ Textures/*
 !Textures/ActuallyPetMercenary.tga
 !Textures/ActuallyPetSad.png
 !Textures/ActuallyPetSad.tga
+!Textures/ActuallyPetSigh.png
+!Textures/ActuallyPetSigh.tga
 !Textures/TabIconTier.png
 !Textures/TabIconTier.tga
 !Textures/TabIconGear.png

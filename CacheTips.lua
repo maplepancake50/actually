@@ -218,12 +218,12 @@ function CacheTips:Create()
     checkbox:SetPoint("TOPLEFT", utility, "TOPLEFT", 15, -43)
     local checkboxLabel = checkbox:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
     checkboxLabel:SetPoint("LEFT", checkbox, "RIGHT", 4, 1)
-    checkboxLabel:SetText("Arrow to Raid Shotcaller")
+    checkboxLabel:SetText("Arrow to Shotcaller")
 
     local arrowStatus = utility:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    arrowStatus:SetPoint("RIGHT", utility, "RIGHT", -18, -15)
-    arrowStatus:SetWidth(430)
-    arrowStatus:SetJustifyH("RIGHT")
+    arrowStatus:SetPoint("LEFT", checkboxLabel, "RIGHT", 12, 0)
+    arrowStatus:SetWidth(155)
+    arrowStatus:SetJustifyH("LEFT")
     self.arrowCheckbox = checkbox
     self.arrowStatus = arrowStatus
 
@@ -250,14 +250,24 @@ function CacheTips:Create()
         end
     end)
 
-    local raidCCCheckbox = CreateFrame("CheckButton", "ActuallyRaidCCCheckButton", utility,
+    local raidCCPanel = CreateFrame("Frame", nil, utility)
+    raidCCPanel:SetPoint("TOPLEFT", utility, "TOPLEFT", 282, -39)
+    raidCCPanel:SetPoint("BOTTOMRIGHT", utility, "BOTTOMRIGHT", -10, 10)
+    SetBackdrop(
+        raidCCPanel,
+        { 0.035, 0.055, 0.070, 0.94 },
+        { 0.25, 0.68, 0.82, 0.84 })
+    self.raidCCPanel = raidCCPanel
+
+    local raidCCCheckbox = CreateFrame("CheckButton", "ActuallyRaidCCCheckButton", raidCCPanel,
         "UICheckButtonTemplate")
     raidCCCheckbox:SetWidth(26)
     raidCCCheckbox:SetHeight(26)
-    raidCCCheckbox:SetPoint("TOPLEFT", utility, "TOPLEFT", 300, -75)
-    local raidCCLabel = raidCCCheckbox:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    raidCCCheckbox:SetPoint("TOPLEFT", raidCCPanel, "TOPLEFT", 7, -7)
+    local raidCCLabel = raidCCCheckbox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     raidCCLabel:SetPoint("LEFT", raidCCCheckbox, "RIGHT", 4, 1)
-    raidCCLabel:SetText("Better Healer Nameplates")
+    raidCCLabel:SetText(
+        "Mass Dispel Helper - Note: |cffff2020changes friendly nameplates while in raid|r")
     self.raidCCCheckbox = raidCCCheckbox
     self.raidCCLabel = raidCCLabel
 
@@ -269,7 +279,7 @@ function CacheTips:Create()
     end)
     raidCCCheckbox:SetScript("OnEnter", function(owner)
         GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
-        GameTooltip:SetText("Better Healer Nameplates", 1, 1, 1)
+        GameTooltip:SetText("Mass Dispel Helper", 1, 1, 1)
         GameTooltip:AddLine("While in a raid or battleground, displays raid members as names only. Cyclone and Rejuvenation show green arrows; Shadowfury and Wild Growth show purple arrows.", nil, nil, nil, true)
         if Addon.RaidCC and Addon.RaidCC.GetRuntimeStatus then
             local state, status = Addon.RaidCC:GetRuntimeStatus()
@@ -290,6 +300,29 @@ function CacheTips:Create()
     raidCCCheckbox:SetScript("OnLeave", function()
         GameTooltip:Hide()
     end)
+
+    local raidCCSettings = CreateFrame("Button", nil, raidCCPanel, "UIPanelButtonTemplate")
+    raidCCSettings:SetWidth(90)
+    raidCCSettings:SetHeight(22)
+    raidCCSettings:SetPoint("TOPLEFT", raidCCLabel, "BOTTOMLEFT", 0, -6)
+    raidCCSettings:SetText("Settings")
+    raidCCSettings:SetScript("OnClick", function()
+        if Addon.RaidCC and Addon.RaidCC.ToggleSettings then
+            Addon.RaidCC:ToggleSettings()
+        end
+    end)
+    raidCCSettings:SetScript("OnEnter", function(owner)
+        GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Mass Dispel Helper Settings", 1, 1, 1)
+        GameTooltip:AddLine(
+            "Give each tracked effect its own arrow and sound rules, or add custom buffs and debuffs by spell ID.",
+            nil, nil, nil, true)
+        GameTooltip:Show()
+    end)
+    raidCCSettings:SetScript("OnLeave", function()
+        GameTooltip:Hide()
+    end)
+    self.raidCCSettingsButton = raidCCSettings
 
     local arcAlerts = CreateFrame("Frame", nil, root)
     arcAlerts:SetPoint("TOPLEFT", root, "TOPLEFT", 0, -202)
@@ -546,7 +579,15 @@ end
 
 function CacheTips:RefreshRaidCCToggle()
     if not self.raidCCCheckbox then return end
-    self.raidCCCheckbox:SetChecked(Addon.RaidCC and Addon.RaidCC:IsEnabled() or false)
+    local available = Addon.RaidCC and Addon.RaidCC.IsEnabled
+    self.raidCCCheckbox:SetChecked(available and Addon.RaidCC:IsEnabled() or false)
+    if self.raidCCSettingsButton then
+        if available and Addon.RaidCC.ToggleSettings then
+            self.raidCCSettingsButton:Enable()
+        else
+            self.raidCCSettingsButton:Disable()
+        end
+    end
     if not self.raidCCLabel then return end
     local state = Addon.RaidCC and Addon.RaidCC.GetRuntimeStatus
         and Addon.RaidCC:GetRuntimeStatus() or "disabled"
@@ -574,7 +615,7 @@ function CacheTips:RefreshArrowToggle()
         self.arrowStatus:SetText("Following " .. target)
         self.arrowStatus:SetTextColor(0.38, 1.00, 0.58)
     elseif enabled then
-        self.arrowStatus:SetText("Waiting for " .. target .. " to join your raid")
+        self.arrowStatus:SetText("Waiting for " .. target)
         self.arrowStatus:SetTextColor(1.00, 0.48, 0.38)
     else
         self.arrowStatus:SetText("Shotcaller: " .. target)

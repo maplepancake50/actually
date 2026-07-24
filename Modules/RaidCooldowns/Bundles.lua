@@ -77,10 +77,7 @@ function Bundles:NextBundleID()
 end
 
 function Bundles:Start(name, spellIDs, leaseReady, startedCallback)
-    if not ARC.Roster:IsLocalCoordinator() then
-        ARC:Print("only the party leader, raid leader, or raid assistants can request bundles")
-        return false
-    end
+    if not ARC:RequireCommandAuthority() then return false end
     if not ARC.Roster:IsGrouped() then
         ARC:Print("join a party or raid before requesting a cooldown bundle")
         return false

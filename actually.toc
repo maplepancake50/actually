@@ -1,7 +1,7 @@
 ## Interface: 30300
 ## Title: actually
-## Notes: Draggable utility-spell tier board prototype for Ascension Season 10 caches.
-## Author: Luke
+## Notes: Ascension Crow's cache utility + guild addon
+## Author: Bolty
 ## Version: 0.3.4
 ## SavedVariables: ActuallyDB
 ## OptionalDeps: TurboPlates

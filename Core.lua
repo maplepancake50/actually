@@ -447,7 +447,7 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
                 local argument = lowerMessage == "raidcc" and "" or string.sub(rawMessage, 8)
                 raidCC:HandleCommand(argument)
             else
-                Addon:Print("Actually Raid CC is not available")
+                Addon:Print("Mass Dispel Helper is not available")
             end
             return
         end

@@ -70,6 +70,9 @@ end
 function ARC:HasConfigurationAuthority(identity)
     local official = Actually and Actually.Official
     if not official then return false end
+    if type(identity) == "table" then
+        identity = identity.name or identity.fullName
+    end
     if type(official.IsOfficer) == "function" then
         local ok, allowed = pcall(official.IsOfficer, official, identity)
         if ok and allowed == true then return true end
@@ -81,9 +84,34 @@ function ARC:HasConfigurationAuthority(identity)
     return false
 end
 
+function ARC:HasCommandAuthority(identity)
+    return self:HasConfigurationAuthority(identity)
+end
+
 function ARC:RequireConfigurationAuthority(identity)
     if self:HasConfigurationAuthority(identity) then return true end
     self:Print("only an actually officer or the actually leader can change ARC configuration")
+    return false
+end
+
+function ARC:RequireCommandAuthority(identity)
+    if self:HasCommandAuthority(identity) then return true end
+    self:Print("only an actually officer or the actually leader can use ARC Commander")
+    return false
+end
+
+function ARC:EnforceAuthorityVisibility()
+    if self:HasCommandAuthority() then return true end
+    for _, moduleName in ipairs({
+        "Commander", "CommanderConfig", "BundleConfig", "SpellConfig", "UserList",
+    }) do
+        local module = self[moduleName]
+        if module and module.frame and module.frame:IsShown() then module.frame:Hide() end
+    end
+    if self.Bundles and self.Bundles.officerSummary
+        and self.Bundles.officerSummary:IsShown() then
+        self.Bundles.officerSummary:Hide()
+    end
     return false
 end
 

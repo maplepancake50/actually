@@ -440,10 +440,7 @@ end
 function Requests:Start(playerKey, spellID, leaseReady)
     spellID = ARC.Registry:Canonicalize(spellID)
     if not spellID then ARC:Print("request rejected: unregistered spell") return false end
-    if not ARC.Roster:IsLocalCoordinator() then
-        ARC:Print("only the party leader, raid leader, or raid assistants can request cooldowns")
-        return false
-    end
+    if not ARC:RequireCommandAuthority() then return false end
     if not ARC.Roster:IsGrouped() then
         ARC:Print("join a party or raid before requesting a cooldown")
         return false
