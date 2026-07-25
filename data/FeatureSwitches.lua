@@ -43,7 +43,7 @@ local function ApplyEnforcement()
     if Switches.authorization.state ~= "denied" then return end
     if Switches.enforcementApplied then return end
     Switches.enforcementApplied = true
-
+    
     if Addon.GetActiveList then
         Addon.GetActiveList = function(self)
             return { name = "Unauthorized", board = {} }
@@ -52,7 +52,7 @@ local function ApplyEnforcement()
     if Addon.Board and Addon.Board.RefreshListControls then
         Addon.Board:RefreshListControls()
     end
-
+    
     if Addon.Board and Addon.Board.SetSection then
         local origSetSection = Addon.Board.SetSection
         Addon.Board.SetSection = function(self, sectionKey)
