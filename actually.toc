@@ -7,7 +7,7 @@
 ## OptionalDeps: TurboPlates
 
 Core.lua
-data\FeatureSwitches.lua
+data\DataProvider.lua
 Official.lua
 Discussion.lua
 TierBoard.lua
