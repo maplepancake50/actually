@@ -155,6 +155,7 @@ end
 
 Events.RAID_ROSTER_UPDATE = rosterChanged
 Events.PARTY_MEMBERS_CHANGED = rosterChanged
+Events.PLAYER_GUILD_UPDATE = rosterChanged
 Events.UPDATE_BATTLEFIELD_STATUS = rosterChanged
 Events.ZONE_CHANGED_NEW_AREA = rosterChanged
 Events.UNIT_CONNECTION = unitStatusChanged

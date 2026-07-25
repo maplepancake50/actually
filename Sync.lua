@@ -51,6 +51,10 @@ local function GuildChannelAvailable()
     return false
 end
 
+local function FeatureAvailable(featureKey)
+    return not Addon.FeatureSwitches or Addon.FeatureSwitches:IsAvailable(featureKey)
+end
+
 local function IsActivePeer(peer, now)
     return peer and now - (tonumber(peer.lastSeen) or 0) <= PEER_TIMEOUT
 end
@@ -579,6 +583,9 @@ local function GearSetSignature(set)
 end
 
 function Sync:ApplySnapshot(snapshot)
+    if not FeatureAvailable("guild_sync_receive") then
+        return false, false
+    end
     local incoming = self:Deserialize(snapshot)
     if not incoming then
         self:Log("Rejected an invalid snapshot.")
@@ -972,6 +979,9 @@ end
 local MESSAGE_PRIORITIES = { "ALERT", "NORMAL", "BULK" }
 
 function Sync:QueueMessage(message, channel, target, priority, tag)
+    if not FeatureAvailable("guild_sync_send") then
+        return false
+    end
     priority = priority == "ALERT" and "ALERT" or priority == "BULK" and "BULK" or "NORMAL"
     if type(message) ~= "string" or string.len(message) > MAX_LIVE_PAYLOAD
         or not self:CanQueueMessages(1, priority) then return false end
@@ -1529,6 +1539,9 @@ function Sync:ApplyLiveAudit(rest, sender)
 end
 
 function Sync:HandleMessage(message, channel, sender)
+    if not FeatureAvailable("guild_sync_receive") then
+        return
+    end
     local kind, rest = string.match(message or "", "^SYNC|([^|]+)|(.*)$")
     if not kind then
         return
@@ -1656,6 +1669,9 @@ function Sync:HandleMessage(message, channel, sender)
 end
 
 function Sync:OnUpdate(elapsed)
+    if not FeatureAvailable("guild_sync_send") and not FeatureAvailable("guild_sync_receive") then
+        return
+    end
     self.sendElapsed = self.sendElapsed + elapsed
     if self.sendElapsed >= 0.15 and self:GetQueueCount() > 0 then
         self.sendElapsed = 0
@@ -1771,9 +1787,9 @@ function Sync:Initialize()
     frame:RegisterEvent("PLAYER_LOGOUT")
     frame:SetScript("OnEvent", function(_, event, prefix, message, channel, sender)
         if event == "PLAYER_LOGOUT" then
-            if GuildChannelAvailable() then
+            if FeatureAvailable("guild_sync_send") and GuildChannelAvailable() then
                 pcall(SendAddonMessage, PREFIX, "SYNC|L|", "GUILD")
-            elseif ENABLE_CROSS_GUILD_TEST_SYNC then
+            elseif FeatureAvailable("guild_sync_send") and ENABLE_CROSS_GUILD_TEST_SYNC then
                 local now = Now()
                 for _, peer in pairs(Sync.peers or {}) do
                     if IsActivePeer(peer, now) then

@@ -47,6 +47,12 @@ local function spellIconText(spellID)
     return icon and ("|T" .. tostring(icon) .. ":16:16:0:0|t ") or ""
 end
 
+local function behaviorLabel(behavior)
+    if behavior == "disabled" then return "On press: Disabled" end
+    if behavior == "error" then return "On press: Error" end
+    return "On press: Enabled"
+end
+
 function CommanderConfig:ShowBundleTooltip(owner, bundleID)
     if not GameTooltip or not owner or not bundleID then return end
     local bundle = ARC.Commander:FindBundle(bundleID)
@@ -150,6 +156,7 @@ function CommanderConfig:NewPlan()
     self.editingIndex = nil
     self.selected = {}
     self.selectionOrder = {}
+    self.behavior = "enabled"
     self.missingStageCount = 0
     self.dirty = false
     self:SetNameText("")
@@ -172,6 +179,7 @@ function CommanderConfig:LoadPlan(index)
     self.editingIndex = index
     self.selected = {}
     self.selectionOrder = {}
+    self.behavior = ARC.Commander:GetPlanBehavior(plan)
     self.missingStageCount = 0
     for _, stage in ipairs(plan.stages or {}) do
         if stage.bundleID and ARC.Commander:FindBundle(stage.bundleID)
@@ -234,6 +242,7 @@ function CommanderConfig:SavePlan()
     end
     local plan = existing or { id = newID() }
     plan.name, plan.stages = name, stages
+    plan.behavior = self.behavior or "enabled"
     plans[index] = plan
     self.editingIndex = index
     self:SetNameText(name)
@@ -270,6 +279,18 @@ function CommanderConfig:SetNameText(value)
     self.refreshingName = true
     self.nameBox:SetText(value or "")
     self.refreshingName = false
+end
+
+function CommanderConfig:CycleBehavior()
+    if self.behavior == "enabled" then
+        self.behavior = "disabled"
+    elseif self.behavior == "disabled" then
+        self.behavior = "error"
+    else
+        self.behavior = "enabled"
+    end
+    self.dirty = true
+    self:Refresh()
 end
 
 function CommanderConfig:CreateRow(index)
@@ -376,6 +397,9 @@ function CommanderConfig:Refresh()
     if (self.editingIndex and self.editingIndex < planCount)
         or (not self.editingIndex and planCount > 0) then self.nextPlan:Enable()
     else self.nextPlan:Disable() end
+    if self.behaviorButton then
+        self.behaviorButton:SetText(behaviorLabel(self.behavior))
+    end
 
     local pages = math.max(1, math.ceil(table.getn(bundles) / PAGE_SIZE))
     self.page = math.max(1, math.min(self.page or 1, pages))
@@ -468,7 +492,7 @@ function CommanderConfig:Initialize()
     frame.subtitle = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     frame.subtitle:SetPoint("TOPLEFT", frame.title, "BOTTOMLEFT", 0, -5)
     frame.subtitle:SetText(
-        "New Command -> choose bundle stages -> Create Command. Edit with Save Changes.")
+        "Choose stages and an explicit Enabled, Disabled, or Error-on-press behavior.")
     frame.subtitle:SetTextColor(0.48, 0.72, 0.84)
 
     frame.close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
@@ -572,6 +596,26 @@ function CommanderConfig:Initialize()
     self.delete:SetPoint("LEFT", self.save, "RIGHT", 5, 0)
     self.delete:SetText("Delete Command")
     self.delete:SetScript("OnClick", function() self:DeletePlan() end)
+
+    self.behaviorButton = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    self.behaviorButton:SetWidth(150)
+    self.behaviorButton:SetHeight(22)
+    self.behaviorButton:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -12, 10)
+    self.behaviorButton:SetText("On press: Enabled")
+    self.behaviorButton:SetScript("OnClick", function() self:CycleBehavior() end)
+    self.behaviorButton:SetScript("OnEnter", function(button)
+        if not GameTooltip then return end
+        GameTooltip:SetOwner(button, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Commander button behavior")
+        GameTooltip:AddLine(
+            "Enabled starts the command. Disabled and Error show a clear message without sending requests.",
+            0.78, 0.86, 0.94, true)
+        GameTooltip:AddLine("Save Changes after selecting a mode.", 0.35, 1.00, 0.35)
+        GameTooltip:Show()
+    end)
+    self.behaviorButton:SetScript("OnLeave", function()
+        if GameTooltip then GameTooltip:Hide() end
+    end)
 
     frame:Hide()
     local plans = ARC.Commander:GetPlans()

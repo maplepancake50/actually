@@ -203,10 +203,39 @@ function Commander:IsPlanPending(planID)
     return self.pendingPlanID == planID
 end
 
+function Commander:GetPlanBehavior(plan)
+    local behavior = type(plan) == "table" and string.lower(tostring(plan.behavior or "")) or ""
+    if behavior == "disabled" or behavior == "error" then return behavior end
+    return "enabled"
+end
+
+function Commander:ShowPlanBehaviorMessage(plan, behavior)
+    local name = tostring(plan and plan.name or "This command")
+    local message
+    if behavior == "disabled" then
+        message = name .. " is disabled by its command configuration."
+    else
+        message = name .. " is configured to return an error and did not start."
+    end
+    if UIErrorsFrame and type(UIErrorsFrame.AddMessage) == "function" then
+        UIErrorsFrame:AddMessage(message, 1.00, 0.25, 0.20, 1)
+    end
+    ARC:Print(message)
+    return false
+end
+
 function Commander:StartPlan(planID)
     if not ARC:RequireCommandAuthority() then return false end
+    if Actually.FeatureSwitches
+        and not Actually.FeatureSwitches:Require("arc_commander", "ARC Commander") then
+        return false
+    end
     local plan = self:FindPlan(planID)
     if not plan then ARC:Print("command plan no longer exists") return false end
+    local behavior = self:GetPlanBehavior(plan)
+    if behavior ~= "enabled" then
+        return self:ShowPlanBehaviorMessage(plan, behavior)
+    end
     if self.pendingPlanID or self.activePlanID or ARC.Bundles.active or ARC.Requests.outgoing then
         ARC:Print("finish or cancel the active cooldown command first")
         return false
@@ -305,7 +334,16 @@ function Commander:ShowTooltip(button)
         end
     end
     GameTooltip:AddLine(" ")
-    GameTooltip:AddLine("Left-click: issue current stage", 0.35, 1.00, 0.35)
+    local behavior = self:GetPlanBehavior(plan)
+    if behavior == "disabled" then
+        GameTooltip:AddLine("Configured behavior: Disabled", 1.00, 0.45, 0.25)
+        GameTooltip:AddLine("Left-click: show the disabled message", 0.80, 0.82, 0.85)
+    elseif behavior == "error" then
+        GameTooltip:AddLine("Configured behavior: Error on press", 1.00, 0.35, 0.25)
+        GameTooltip:AddLine("Left-click: show the configured error", 0.80, 0.82, 0.85)
+    else
+        GameTooltip:AddLine("Left-click: issue current stage", 0.35, 1.00, 0.35)
+    end
     GameTooltip:AddLine(self:IsPlanActive(plan.id)
         and "Right-click: cancel active stage"
         or "Right-click: reset to stage 1", 1.00, 0.72, 0.20)
@@ -355,7 +393,10 @@ function Commander:CreateButton(index)
         if mouseButton == "RightButton" and Commander:IsPlanActive(self.plan.id) then
             ARC.Bundles:CancelActive("cancelled from commander bar")
         elseif mouseButton == "RightButton" then Commander:ResetPlan(self.plan.id)
-        elseif self.arcActionable then Commander:StartPlan(self.plan.id) end
+        elseif self.arcActionable
+            or Commander:GetPlanBehavior(self.plan) ~= "enabled" then
+            Commander:StartPlan(self.plan.id)
+        end
     end)
     button:SetScript("OnEnter", function(self) Commander:ShowTooltip(self) end)
     button:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
@@ -376,6 +417,7 @@ function Commander:RefreshButton(button, plan)
         and (tostring(stageIndex) .. "/" .. tostring(stageCount)) or "0/0")
 
     local active = self:IsPlanActive(plan.id)
+    local behavior = self:GetPlanBehavior(plan)
     local ready, total, shortest = self:StageAvailability(stage)
     if active then
         button.status:SetText("ACTIVE - requests in progress")
@@ -414,6 +456,20 @@ function Commander:RefreshButton(button, plan)
         button.glow:Hide()
         button.arcActionable = false
         button:SetBackdropBorderColor(0.22, 0.26, 0.30, 0.92)
+    elseif behavior == "disabled" then
+        button.status:SetText("DISABLED BY CONFIG")
+        button.status:SetTextColor(1.00, 0.58, 0.22)
+        button.stage:SetTextColor(1.00, 0.58, 0.22)
+        button.glow:Hide()
+        button.arcActionable = true
+        button:SetBackdropBorderColor(0.78, 0.40, 0.12, 1)
+    elseif behavior == "error" then
+        button.status:SetText("CONFIGURED ERROR ON PRESS")
+        button.status:SetTextColor(1.00, 0.30, 0.25)
+        button.stage:SetTextColor(1.00, 0.30, 0.25)
+        button.glow:Hide()
+        button.arcActionable = true
+        button:SetBackdropBorderColor(0.88, 0.20, 0.16, 1)
     elseif total > 0 and ready == total then
         button.status:SetText("READY " .. tostring(ready) .. "/" .. tostring(total))
         button.status:SetTextColor(0.35, 1.00, 0.35)

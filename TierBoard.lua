@@ -177,6 +177,10 @@ function Board:RefreshAssistTrackerTab()
 end
 
 function Board:SetSection(sectionKey)
+    if Addon.FeatureSwitches and not Addon.FeatureSwitches:IsAvailable("navigation_tabs") then
+        return false
+    end
+
     local selected
     if sectionKey == "assist" and Addon.Official and Addon.Official:IsOfficer() then
         selected = { key = "assist", title = "Assist Tracker" }
@@ -735,6 +739,9 @@ function Board:UpsertCustomSpell(spellID, category, coa)
 end
 
 function Board:AddCustomSpell(spellID, category, coa)
+    if Addon.FeatureSwitches and not Addon.FeatureSwitches:Require("tier_write", "Tier-list updates") then
+        return false
+    end
     local spell = self:UpsertCustomSpell(spellID, category, coa)
     if not spell then
         Addon:Print("Spell ID " .. tostring(spellID) .. " is not available in the client.")
@@ -756,6 +763,9 @@ function Board:AddCustomSpell(spellID, category, coa)
 end
 
 function Board:AddCustomSpells(entries)
+    if Addon.FeatureSwitches and not Addon.FeatureSwitches:Require("tier_write", "Tier-list updates") then
+        return 0, #(entries or {})
+    end
     if not Addon:CanEditActiveList() then
         Addon:Print(Addon.OFFICIAL_LIST_NAME .. " is read-only.")
         return 0, #(entries or {})
@@ -792,6 +802,9 @@ end
 
 function Board:SetCustomSpellCategory(spell, category)
     if not spell or not spell.custom or not spell.spellID then
+        return
+    end
+    if Addon.FeatureSwitches and not Addon.FeatureSwitches:Require("tier_write", "Tier-list updates") then
         return
     end
 
@@ -831,6 +844,9 @@ function Board:SetCustomSpellCOA(spell, enabled)
     if not spell or not spell.custom or not spell.spellID then
         return
     end
+    if Addon.FeatureSwitches and not Addon.FeatureSwitches:Require("tier_write", "Tier-list updates") then
+        return
+    end
 
     if not Addon:CanEditActiveList() then
         Addon:Print(Addon.OFFICIAL_LIST_NAME .. " is read-only.")
@@ -864,6 +880,9 @@ end
 
 function Board:DeleteCustomSpell(spell)
     if not spell or not spell.custom or not spell.spellID then
+        return
+    end
+    if Addon.FeatureSwitches and not Addon.FeatureSwitches:Require("tier_write", "Tier-list updates") then
         return
     end
 
@@ -1016,6 +1035,9 @@ function Board:SnapshotState()
 end
 
 function Board:SaveState(auditAction, changedKeys)
+    if Addon.FeatureSwitches and not Addon.FeatureSwitches:IsAvailable("tier_write") then
+        return false
+    end
     if not Addon:CanEditActiveList() then
         return
     end
@@ -1098,6 +1120,12 @@ function Board:StopDrag(card)
     card.dragSawButtonDown = nil
     card:SetFrameStrata("DIALOG")
     card:SetAlpha(1)
+
+    if Addon.FeatureSwitches and not Addon.FeatureSwitches:Require("tier_write", "Tier-list updates") then
+        self.dragging = nil
+        self:Layout()
+        return
+    end
 
     local x, y = GetCursorUIPosition()
     local destinationTier, destinationIndex = self:GetDropTarget(x, y)

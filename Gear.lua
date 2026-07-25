@@ -114,7 +114,8 @@ function Gear:SelectSet(id)
         id = nil
     end
     local previous = self:GetSelectedSet()
-    if previous and previous.id ~= id and self:IsOfficer() and self.nameEdit and self.notesEdit then
+    local canWrite = not Addon.FeatureSwitches or Addon.FeatureSwitches:IsAvailable("gear_write")
+    if previous and previous.id ~= id and canWrite and self:IsOfficer() and self.nameEdit and self.notesEdit then
         local draftName = Addon.Util.Trim(self.nameEdit:GetText())
         local draftNotes = self.notesEdit:GetText() or ""
         if draftName ~= "" and (draftName ~= previous.name or draftNotes ~= (previous.notes or "")) then
@@ -135,6 +136,9 @@ function Gear:SelectSet(id)
 end
 
 function Gear:CreateSet()
+    if Addon.FeatureSwitches and not Addon.FeatureSwitches:Require("gear_write", "Gear-guide updates") then
+        return
+    end
     if not self:IsOfficer() then
         Addon:Print("Only officers can edit gear guides.")
         return
@@ -161,6 +165,9 @@ function Gear:CreateSet()
 end
 
 function Gear:SaveSelectedSet()
+    if Addon.FeatureSwitches and not Addon.FeatureSwitches:Require("gear_write", "Gear-guide updates") then
+        return
+    end
     if not self:IsOfficer() then
         Addon:Print("Only officers can edit gear guides.")
         return
@@ -182,6 +189,9 @@ function Gear:SaveSelectedSet()
 end
 
 function Gear:DeleteSelectedSet()
+    if Addon.FeatureSwitches and not Addon.FeatureSwitches:Require("gear_write", "Gear-guide updates") then
+        return
+    end
     if not self:IsOfficer() then
         Addon:Print("Only officers can edit gear guides.")
         return
@@ -235,6 +245,9 @@ function Gear:CaptureItemLink(link)
     if not itemLink then
         return false
     end
+    if Addon.FeatureSwitches and not Addon.FeatureSwitches:Require("gear_write", "Gear-guide updates") then
+        return true
+    end
     if not self:IsOfficer() then
         self:SetStatus("Gear guides are read-only for non-officers.", true)
         return true
@@ -257,6 +270,9 @@ function Gear:CaptureItemLink(link)
 end
 
 function Gear:ClearSlot(slotKey)
+    if Addon.FeatureSwitches and not Addon.FeatureSwitches:Require("gear_write", "Gear-guide updates") then
+        return
+    end
     if not self:IsOfficer() then
         return
     end

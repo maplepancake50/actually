@@ -88,6 +88,9 @@ function Backups:CaptureLoginSnapshot()
 end
 
 function Backups:Import(payload)
+    if Addon.FeatureSwitches and not Addon.FeatureSwitches:Require("backup_import", "Backup import") then
+        return false
+    end
     local parsed, normalized = self:Validate(payload)
     if not parsed then
         Addon:Print("That recovery snapshot is invalid or from an incompatible version.")
@@ -109,6 +112,9 @@ function Backups:Import(payload)
 end
 
 function Backups:RestoreRecord(record)
+    if Addon.FeatureSwitches and not Addon.FeatureSwitches:Require("backup_restore", "Backup restore") then
+        return false
+    end
     if type(record) ~= "table" then return false end
     if not Addon.Official or not Addon.Official:IsOwner() then
         Addon:Print("Only the actually leader can restore official data.")

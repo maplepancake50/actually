@@ -582,6 +582,9 @@ function Official:AddAuditEntry(action, author, activity)
 end
 
 function Official:RecordBoardChange(action, newBoard, changedKeys, author)
+    if Addon.FeatureSwitches and not Addon.FeatureSwitches:Require("tier_write", "Official tier-list updates") then
+        return false
+    end
     if not self:IsOfficer()
         or (Addon.Sync and Addon.Sync.IsOfficialEditReady and not Addon.Sync:IsOfficialEditReady()) then
         return false
@@ -643,6 +646,9 @@ function Official:RecordBoardChange(action, newBoard, changedKeys, author)
 end
 
 function Official:RecordBoardReset(action, author)
+    if Addon.FeatureSwitches and not Addon.FeatureSwitches:Require("tier_write", "Official tier-list updates") then
+        return false
+    end
     if not self:IsOfficer()
         or (Addon.Sync and Addon.Sync.IsOfficialEditReady and not Addon.Sync:IsOfficialEditReady()) then
         return false

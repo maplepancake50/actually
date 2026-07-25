@@ -137,7 +137,7 @@ function OfficerConfig:Initialize()
         "New Bundle -> choose cooldowns -> Create Bundle. Edit with Save Changes.")
     commandFrame.title:SetText("2. Commander Button Builder")
     commandFrame.subtitle:SetText(
-        "New Command -> choose bundle stages -> Create Command. Edit with Save Changes.")
+        "Choose stages plus an Enabled, Disabled, or Error-on-press behavior.")
 
     commandFrame:SetHeight(PANE_HEIGHT)
     ARC.CommanderConfig.listPanel:SetHeight(380)

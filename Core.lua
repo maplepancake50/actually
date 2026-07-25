@@ -7,7 +7,7 @@ local Util = Addon.Util or {}
 Addon.Util = Util
 
 Addon.name = addonName or "actually"
-Addon.version = "0.3.4"
+Addon.version = "0.3.6"
 Addon.MESSAGE_PREFIX = "ACTUALLY"
 Addon.tierOrder = { "S", "A", "B", "C", "D", "U" }
 Addon.DEFAULT_PERSONAL_LIST_NAME = "My Tier List"
@@ -349,6 +349,9 @@ function Addon:Print(message)
 end
 
 function Addon:ResetBoard()
+    if self.FeatureSwitches and not self.FeatureSwitches:Require("tier_write", "Tier-list updates") then
+        return
+    end
     if not self:CanEditActiveList() then
         self:Print(self.OFFICIAL_LIST_NAME .. " is read-only.")
         return

@@ -2,11 +2,12 @@
 ## Title: actually
 ## Notes: Ascension Crow's cache utility + guild addon
 ## Author: Bolty
-## Version: 0.3.4
+## Version: 0.3.6
 ## SavedVariables: ActuallyDB
 ## OptionalDeps: TurboPlates
 
 Core.lua
+data\FeatureSwitches.lua
 Official.lua
 Discussion.lua
 TierBoard.lua

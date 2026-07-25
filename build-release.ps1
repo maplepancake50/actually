@@ -176,7 +176,7 @@ function New-ActuallyPackage {
             Copy-RelativeFile -RelativePath $RelativePath -PackageRoot $PackageRoot
         }
 
-        foreach ($OptionalFile in @("README.md", "LICENSE")) {
+        foreach ($OptionalFile in @("README.md", "LICENSE", "THIRD_PARTY_NOTICES.md")) {
             $OptionalPath = Join-Path $RepositoryDirectory $OptionalFile
             if (Test-Path -LiteralPath $OptionalPath -PathType Leaf) {
                 Copy-Item -LiteralPath $OptionalPath -Destination (Join-Path $PackageRoot $OptionalFile) -Force

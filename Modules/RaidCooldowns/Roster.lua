@@ -11,6 +11,14 @@ local function shortName(name)
     return name and (string.match(name, "^[^-]+") or name) or nil
 end
 
+local function guildInfo(unit)
+    if type(GetGuildInfo) ~= "function" then return nil, false end
+    local ok, guild = pcall(GetGuildInfo, unit)
+    if not ok then return nil, false end
+    if type(guild) ~= "string" or guild == "" then guild = nil end
+    return guild, true
+end
+
 function Roster:Initialize()
     self.byKey = {}
     self.byName = {}
@@ -29,12 +37,15 @@ function Roster:AddUnit(unit)
     local guid = UnitGUID and UnitGUID(unit)
     local key = self:PlayerKey(guid, name)
     if not key then return end
+    local guild, guildKnown = guildInfo(unit)
     local identity = {
         key = key,
         name = name,
         shortName = shortName(name),
         guid = guid,
         unit = unit,
+        guild = guild,
+        guildKnown = guildKnown,
         connected = not UnitIsConnected or UnitIsConnected(unit) and true or false,
         dead = UnitIsDeadOrGhost and UnitIsDeadOrGhost(unit) and true or false,
     }
@@ -69,7 +80,18 @@ function Roster:GetPlayer()
     local guid = UnitGUID and UnitGUID("player")
     local name = GetUnitName and GetUnitName("player", true) or UnitName("player")
     local key = self:PlayerKey(guid, name)
-    return key, self.byKey[key] or { key = key, guid = guid, name = name, unit = "player", connected = true }
+    local identity = self.byKey[key]
+    if identity then return key, identity end
+    local guild, guildKnown = guildInfo("player")
+    return key, {
+        key = key,
+        guid = guid,
+        name = name,
+        unit = "player",
+        guild = guild,
+        guildKnown = guildKnown,
+        connected = true,
+    }
 end
 
 function Roster:FindSender(sender)
