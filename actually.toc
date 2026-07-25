@@ -60,3 +60,4 @@ Modules\RaidCooldowns\SpoofTest.lua
 Modules\RaidCooldowns\TestMode.lua
 Modules\RaidCooldowns\Debug.lua
 Modules\RaidCooldowns\Init.lua
+SpecReporter.lua

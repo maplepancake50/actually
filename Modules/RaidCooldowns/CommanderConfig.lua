@@ -367,18 +367,8 @@ function CommanderConfig:Refresh()
                 .. (self.missingStageCount == 1 and "" or "S"))
             self.dirtyText:SetTextColor(1.00, 0.30, 0.25)
             self.dirtyText:Show()
-        elseif not self.editingIndex then
-            self.dirtyText:SetText("NEW - NOT SAVED")
-            self.dirtyText:SetTextColor(1.00, 0.70, 0.20)
-            self.dirtyText:Show()
-        elseif self.dirty then
-            self.dirtyText:SetText("UNSAVED CHANGES")
-            self.dirtyText:SetTextColor(1.00, 0.70, 0.20)
-            self.dirtyText:Show()
         else
-            self.dirtyText:SetText("SAVED")
-            self.dirtyText:SetTextColor(0.35, 1.00, 0.35)
-            self.dirtyText:Show()
+            self.dirtyText:Hide()
         end
     end
     if self.editingIndex and self.editingIndex > 1 then self.previousPlan:Enable()
@@ -422,7 +412,26 @@ function CommanderConfig:Refresh()
     self.pageText:SetText("Stage bundles " .. tostring(self.page) .. "/" .. tostring(pages))
     if self.page > 1 then self.previousPage:Enable() else self.previousPage:Disable() end
     if self.page < pages then self.nextPage:Enable() else self.nextPage:Disable() end
-    if self.editingIndex then self.delete:Enable() else self.delete:Disable() end
+    if self.editingIndex then
+        self.new:Enable()
+        self.delete:Show()
+        self.delete:Enable()
+        if (self.missingStageCount or 0) > 0 then
+            self.save:SetText("Repair & Save")
+            self.save:Enable()
+        elseif self.dirty then
+            self.save:SetText("Save Changes")
+            self.save:Enable()
+        else
+            self.save:SetText("Saved")
+            self.save:Disable()
+        end
+    else
+        self.new:Disable()
+        self.delete:Hide()
+        self.save:SetText("Create Command")
+        self.save:Enable()
+    end
     if table.getn(bundles) == 0 then self.empty:Show() else self.empty:Hide() end
 end
 
@@ -458,7 +467,8 @@ function CommanderConfig:Initialize()
 
     frame.subtitle = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     frame.subtitle:SetPoint("TOPLEFT", frame.title, "BOTTOMLEFT", 0, -5)
-    frame.subtitle:SetText("Build stage bundles with /act arc bundles, then select them in click order")
+    frame.subtitle:SetText(
+        "New Command -> choose bundle stages -> Create Command. Edit with Save Changes.")
     frame.subtitle:SetTextColor(0.48, 0.72, 0.84)
 
     frame.close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
@@ -543,24 +553,24 @@ function CommanderConfig:Initialize()
     self.pageText:SetPoint("LEFT", self.nextPage, "RIGHT", 8, 0)
 
     self.new = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    self.new:SetWidth(64)
+    self.new:SetWidth(104)
     self.new:SetHeight(22)
     self.new:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 12, 10)
-    self.new:SetText("New")
+    self.new:SetText("New Command")
     self.new:SetScript("OnClick", function() self:CreatePlan() end)
 
     self.save = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    self.save:SetWidth(64)
+    self.save:SetWidth(112)
     self.save:SetHeight(22)
     self.save:SetPoint("LEFT", self.new, "RIGHT", 5, 0)
-    self.save:SetText("Save")
+    self.save:SetText("Create Command")
     self.save:SetScript("OnClick", function() self:SavePlan() end)
 
     self.delete = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    self.delete:SetWidth(64)
+    self.delete:SetWidth(104)
     self.delete:SetHeight(22)
     self.delete:SetPoint("LEFT", self.save, "RIGHT", 5, 0)
-    self.delete:SetText("Delete")
+    self.delete:SetText("Delete Command")
     self.delete:SetScript("OnClick", function() self:DeletePlan() end)
 
     frame:Hide()

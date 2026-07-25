@@ -134,10 +134,10 @@ function OfficerConfig:Initialize()
 
     bundleFrame.title:SetText("1. Cooldown Bundle Builder")
     bundleFrame.subtitle:SetText(
-        "Choose cooldowns; ARC selects ready players and keeps this prompt order")
+        "New Bundle -> choose cooldowns -> Create Bundle. Edit with Save Changes.")
     commandFrame.title:SetText("2. Commander Button Builder")
     commandFrame.subtitle:SetText(
-        "Choose bundle stages in click order; changes remain drafts until Save")
+        "New Command -> choose bundle stages -> Create Command. Edit with Save Changes.")
 
     commandFrame:SetHeight(PANE_HEIGHT)
     ARC.CommanderConfig.listPanel:SetHeight(380)

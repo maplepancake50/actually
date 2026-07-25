@@ -326,6 +326,8 @@ local CHATTER = {
     "core v core we can't lose",
     "We do no damage in smoke bombs",
     "I heard korkron have 500 people",
+    "Rogues are good at cache bro I promise",
+    "How do I get the Padlord title?",
 }
 
 local DRAG_CHATTER = {
@@ -1036,10 +1038,13 @@ function Pet:RegisterRapidClick()
     if self.rapidClickCount >= RAPID_CLICK_COUNT then
         self.rapidClickCount = 0
         self.rapidClickStarted = nil
-        if math.random() < 0.5 then
+        local eventRoll = math.random(1, 3)
+        if eventRoll == 1 then
             return self:TriggerCrowLaunch()
+        elseif eventRoll == 2 then
+            return self:TriggerDeathGrip()
         end
-        return self:TriggerDeathGrip()
+        return self:TriggerGripCombo()
     end
     return false
 end

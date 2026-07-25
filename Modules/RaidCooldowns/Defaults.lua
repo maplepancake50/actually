@@ -7,7 +7,7 @@ ARC.Defaults = {
         ignoreSelf = false,
         hideWhileSolo = false,
         testUI = {
-            shown = true,
+            shown = false,
             point = "CENTER",
             x = 0,
             y = 0,
@@ -70,7 +70,7 @@ ARC.Defaults = {
         },
         cooldownBundles = {},
         commanderUI = {
-            shown = true,
+            shown = false,
             point = "CENTER",
             x = -330,
             y = 0,

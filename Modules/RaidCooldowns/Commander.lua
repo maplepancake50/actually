@@ -41,6 +41,26 @@ local function applyLockIcon(button, locked)
     button:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
 end
 
+local function showLockTooltip(button, locked)
+    if not GameTooltip then return end
+    GameTooltip:SetOwner(button, "ANCHOR_RIGHT")
+    GameTooltip:SetText(locked and "Commander position locked" or "Commander position unlocked")
+    GameTooltip:AddLine(locked and "Click to unlock frame movement."
+        or "Click to lock frame movement.", 0.35, 1.00, 0.35)
+    GameTooltip:AddLine("The resize handle remains available.", 0.65, 0.75, 0.85)
+    GameTooltip:Show()
+end
+
+local function showResizeTooltip(button)
+    if not GameTooltip then return end
+    GameTooltip:SetOwner(button, "ANCHOR_RIGHT")
+    GameTooltip:SetText("Resize ARC Commander")
+    GameTooltip:AddLine(
+        "Drag left or right to resize the bar and every command together.",
+        0.35, 1.00, 0.35)
+    GameTooltip:Show()
+end
+
 local function copyArray(source)
     local result = {}
     for _, value in ipairs(source or {}) do table.insert(result, value) end
@@ -447,12 +467,11 @@ function Commander:ApplyLayoutLock()
     local profile = ARC.db.profile.commanderUI
     local locked = profile.locked ~= false
     applyLockIcon(self.frame.lock, locked)
+    self.frame.resizeGrip:Show()
     if locked then
-        self.frame.resizeGrip:Hide()
         self.frame:SetBackdropColor(0.02, 0.035, 0.055, 0.62)
         self.frame:SetBackdropBorderColor(0.12, 0.34, 0.46, 0.88)
     else
-        self.frame.resizeGrip:Show()
         self.frame:SetBackdropColor(0.03, 0.055, 0.085, 0.82)
         self.frame:SetBackdropBorderColor(0.24, 0.86, 1.00, 1)
     end
@@ -466,7 +485,6 @@ end
 
 function Commander:BeginScaleResize()
     local profile = ARC.db.profile.commanderUI
-    if profile.locked ~= false then return end
     local grip = self.frame.resizeGrip
     grip.startCursorX = cursorX()
     grip.startScale = self.frame:GetScale()
@@ -525,7 +543,16 @@ function Commander:CreateFrame()
     frame.lock:SetWidth(20)
     frame.lock:SetHeight(20)
     frame.lock:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -7, -4)
-    frame.lock:SetScript("OnClick", function() self:ToggleLayoutLock() end)
+    frame.lock:SetScript("OnClick", function(button)
+        self:ToggleLayoutLock()
+        showLockTooltip(button, profile.locked ~= false)
+    end)
+    frame.lock:SetScript("OnEnter", function(button)
+        showLockTooltip(button, profile.locked ~= false)
+    end)
+    frame.lock:SetScript("OnLeave", function()
+        if GameTooltip then GameTooltip:Hide() end
+    end)
 
     frame.dragBar = CreateFrame("Frame", nil, frame)
     frame.dragBar:SetPoint("TOPLEFT", frame, "TOPLEFT", 3, -3)
@@ -533,7 +560,9 @@ function Commander:CreateFrame()
     frame.dragBar:SetHeight(22)
     frame.dragBar:EnableMouse(true)
     frame.dragBar:RegisterForDrag("LeftButton")
-    frame.dragBar:SetScript("OnDragStart", function() frame:StartMoving() end)
+    frame.dragBar:SetScript("OnDragStart", function()
+        if profile.locked == false then frame:StartMoving() end
+    end)
     frame.dragBar:SetScript("OnDragStop", function()
         frame:StopMovingOrSizing()
         savePosition(frame, profile)
@@ -563,6 +592,10 @@ function Commander:CreateFrame()
     frame.resizeGrip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
     frame.resizeGrip:SetScript("OnMouseDown", function() self:BeginScaleResize() end)
     frame.resizeGrip:SetScript("OnMouseUp", function() self:EndScaleResize() end)
+    frame.resizeGrip:SetScript("OnEnter", function(button) showResizeTooltip(button) end)
+    frame.resizeGrip:SetScript("OnLeave", function()
+        if GameTooltip then GameTooltip:Hide() end
+    end)
 
     self.frame = frame
     self:ApplyLayoutLock()

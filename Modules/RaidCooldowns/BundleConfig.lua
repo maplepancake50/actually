@@ -504,18 +504,6 @@ function BundleConfig:Refresh()
     else
         self.bundleText:SetText("New bundle  (" .. tostring(bundleCount) .. " saved)")
     end
-    if self.dirtyText then
-        if not self.editingIndex then
-            self.dirtyText:SetText("NEW - NOT SAVED")
-            self.dirtyText:SetTextColor(1.00, 0.70, 0.20)
-        elseif self.dirty then
-            self.dirtyText:SetText("UNSAVED CHANGES")
-            self.dirtyText:SetTextColor(1.00, 0.70, 0.20)
-        else
-            self.dirtyText:SetText("SAVED")
-            self.dirtyText:SetTextColor(0.35, 1.00, 0.35)
-        end
-    end
     if self.editingIndex and self.editingIndex > 1 then self.previousBundle:Enable()
     else self.previousBundle:Disable() end
     if (self.editingIndex and self.editingIndex < bundleCount)
@@ -558,7 +546,23 @@ function BundleConfig:Refresh()
     self.pageText:SetText("Spells " .. tostring(self.spellPage) .. "/" .. tostring(pages))
     if self.spellPage > 1 then self.previousPage:Enable() else self.previousPage:Disable() end
     if self.spellPage < pages then self.nextPage:Enable() else self.nextPage:Disable() end
-    if self.editingIndex then self.delete:Enable() else self.delete:Disable() end
+    if self.editingIndex then
+        self.new:Enable()
+        self.delete:Show()
+        self.delete:Enable()
+        if self.dirty then
+            self.save:SetText("Save Changes")
+            self.save:Enable()
+        else
+            self.save:SetText("Saved")
+            self.save:Disable()
+        end
+    else
+        self.new:Disable()
+        self.delete:Hide()
+        self.save:SetText("Create Bundle")
+        self.save:Enable()
+    end
     if self.selectedSummaryText then
         local selected = self:GetSelectedSpellIDs()
         local names = {}
@@ -629,7 +633,7 @@ function BundleConfig:Initialize()
     frame.subtitle = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     frame.subtitle:SetPoint("TOPLEFT", frame.title, "BOTTOMLEFT", 0, -5)
     frame.subtitle:SetText(
-        "Choose cooldowns; ARC selects ready players and queues each player's prompts in this order")
+        "New Bundle -> choose cooldowns -> Create Bundle. Edit saved bundles with Save Changes.")
     frame.subtitle:SetTextColor(0.58, 0.50, 0.72)
 
     frame.close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
@@ -762,28 +766,25 @@ function BundleConfig:Initialize()
     self.pageText:SetPoint("LEFT", self.nextPage, "RIGHT", 8, 0)
 
     self.new = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    self.new:SetWidth(58)
+    self.new:SetWidth(92)
     self.new:SetHeight(22)
     self.new:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", 12, 10)
-    self.new:SetText("New")
+    self.new:SetText("New Bundle")
     self.new:SetScript("OnClick", function() self:NewBundle() end)
 
     self.save = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    self.save:SetWidth(58)
+    self.save:SetWidth(105)
     self.save:SetHeight(22)
     self.save:SetPoint("LEFT", self.new, "RIGHT", 5, 0)
-    self.save:SetText("Save")
+    self.save:SetText("Create Bundle")
     self.save:SetScript("OnClick", function() self:SaveBundle() end)
 
     self.delete = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
-    self.delete:SetWidth(58)
+    self.delete:SetWidth(92)
     self.delete:SetHeight(22)
     self.delete:SetPoint("LEFT", self.save, "RIGHT", 5, 0)
-    self.delete:SetText("Delete")
+    self.delete:SetText("Delete Bundle")
     self.delete:SetScript("OnClick", function() self:DeleteBundle() end)
-
-    self.dirtyText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    self.dirtyText:SetPoint("BOTTOM", frame, "BOTTOM", 35, 15)
 
     self.cancel = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
     self.cancel:SetWidth(100)

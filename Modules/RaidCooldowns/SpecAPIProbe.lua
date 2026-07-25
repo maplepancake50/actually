@@ -158,7 +158,8 @@ function SpecAPIProbe:RefreshHeader()
     local activeBook = self:GetActiveBook()
     self.frame.status:SetText("Active book: " .. tostring(activeBook or "unknown")
         .. "   ChrSpec ID: " .. tostring(chrSpec or "unknown")
-        .. "   Selected probe book: " .. tostring(self.selectedSpec))
+        .. "   Selected probe book: " .. tostring(self.selectedSpec)
+        .. "   Cached spec rows: " .. tostring(self.cachedSpecControlCount or 0))
 end
 
 function SpecAPIProbe:ProbeAPIs()
@@ -417,42 +418,96 @@ function SpecAPIProbe:FindChangeSpecSlashHandler()
     return nil
 end
 
+local function frameText(frame)
+    local parts = {}
+    if frame and type(frame.GetText) == "function" then
+        local ok, value = pcall(frame.GetText, frame)
+        if ok and type(value) == "string" and value ~= "" then table.insert(parts, value) end
+    end
+    if frame and type(frame.GetRegions) == "function" then
+        local regions = pack(frame:GetRegions())
+        for index = 1, regions.n do
+            local region = regions[index]
+            if region and type(region.GetText) == "function" then
+                local ok, value = pcall(region.GetText, region)
+                if ok and type(value) == "string" and value ~= "" then
+                    table.insert(parts, value)
+                end
+            end
+        end
+    end
+    return table.concat(parts, " ")
+end
+
+local function safeGetScript(frame, scriptName)
+    if not frame or type(frame.GetScript) ~= "function" then return nil end
+    local ok, script = pcall(frame.GetScript, frame, scriptName)
+    return ok and script or nil
+end
+
+local function clickableAncestor(frame)
+    local candidate = frame
+    for _ = 1, 6 do
+        if not candidate then return nil end
+        if type(candidate.Click) == "function" then return candidate end
+        if safeGetScript(candidate, "OnClick") or safeGetScript(candidate, "OnMouseUp") then
+            return candidate
+        end
+        candidate = type(candidate.GetParent) == "function" and candidate:GetParent() or nil
+    end
+    return nil
+end
+
+function SpecAPIProbe:FindVisibleSpecControls()
+    local controls, visited = {}, {}
+    local function visit(frame, depth)
+        if not frame or visited[frame] or depth > 18 then return end
+        visited[frame] = true
+        local shown = type(frame.IsShown) ~= "function" or frame:IsShown()
+        if shown then
+            local text = frameText(frame)
+            local book = tonumber(string.match(text, "[Ss]peciali[sz]ation:%s*(%d+)"))
+            if book and book >= 1 and book <= 12 and not controls[book] then
+                controls[book] = clickableAncestor(frame)
+            end
+            if type(frame.GetChildren) == "function" then
+                local children = pack(frame:GetChildren())
+                for index = 1, children.n do visit(children[index], depth + 1) end
+            end
+        end
+    end
+    visit(UIParent, 0)
+    return controls
+end
+
+function SpecAPIProbe:CacheVisibleSpecControls()
+    local controls = self:FindVisibleSpecControls()
+    local count = 0
+    for _ in pairs(controls) do count = count + 1 end
+    if count > 0 then
+        self.cachedSpecControls = controls
+        self.cachedSpecControlCount = count
+        self:RefreshHeader()
+    end
+    return count
+end
+
 function SpecAPIProbe:InvokeChangeSpec(book)
-    local handler, key = self:FindChangeSpecSlashHandler()
-    if handler then
-        local ok, result = pcall(handler, tostring(book))
-        if not ok then return false, result end
-        return true, "SlashCmdList[" .. tostring(key) .. "] => " .. tostring(result)
-    end
-
-    if type(ChatEdit_ParseText) ~= "function" then
-        return false, "ChatEdit_ParseText unavailable"
-    end
-    local editBox
-    if type(ChatEdit_ChooseBoxForSend) == "function" then
-        local chooseOK, chosen = pcall(ChatEdit_ChooseBoxForSend)
-        if chooseOK then editBox = chosen end
-    end
-    editBox = editBox or ChatFrameEditBox
-    if not editBox or type(editBox.SetText) ~= "function"
-        or type(editBox.GetText) ~= "function" then
-        return false, "chat edit box unavailable"
-    end
-
-    local priorText = editBox:GetText() or ""
-    local priorCursor = type(editBox.GetCursorPosition) == "function"
-        and editBox:GetCursorPosition() or 0
-    local parseOK, parseResult = pcall(function()
-        editBox:SetText("/cs " .. tostring(book))
-        return ChatEdit_ParseText(editBox, 1)
+    local run = self.autoRun
+    local control = run and run.controls and run.controls[book]
+    if not control then return false, "visible Specialization: " .. tostring(book)
+        .. " control was not found" end
+    local ok, result = pcall(function()
+        if type(control.Click) == "function" then return control:Click("LeftButton") end
+        local onClick = safeGetScript(control, "OnClick")
+        if onClick then return onClick(control, "LeftButton") end
+        local onMouseUp = safeGetScript(control, "OnMouseUp")
+        if onMouseUp then return onMouseUp(control, "LeftButton") end
+        error("control has no click handler")
     end)
-    editBox:SetText(priorText)
-    if type(editBox.SetCursorPosition) == "function" then
-        editBox:SetCursorPosition(math.min(priorCursor, #priorText))
-    end
-    if not parseOK then return false, parseResult end
-    return true, "ChatEdit_ParseText('/cs " .. tostring(book)
-        .. "', send=1) => " .. tostring(parseResult)
+    if not ok then return false, result end
+    return true, "clicked visible Specialization: " .. tostring(book)
+        .. " control => " .. tostring(result)
 end
 
 function SpecAPIProbe:ScheduleAutomatedRun(delay, callback)
@@ -480,12 +535,12 @@ function SpecAPIProbe:PollOriginalBook()
     local run = self.autoRun
     if not run then return end
     if self:GetActiveBook() == run.originalBook then
-        self:FinishAutomatedRun("Automated /cs test complete; original book restored.")
+        self:FinishAutomatedRun("Automated test complete; original book restored.")
         return
     end
     if ARC:Now() >= run.deadline then
-        self:FinishAutomatedRun("Automated /cs test complete, but restoration timed out. "
-            .. "Please type /cs " .. tostring(run.originalBook) .. " manually.")
+        self:FinishAutomatedRun("Automated test complete, but restoration timed out. "
+            .. "Please return to book " .. tostring(run.originalBook) .. " manually.")
         return
     end
     self:ScheduleAutomatedRun(0.25, self.PollOriginalBook)
@@ -495,10 +550,11 @@ function SpecAPIProbe:RestoreOriginalBook()
     local run = self.autoRun
     if not run then return end
     if self:GetActiveBook() == run.originalBook then
-        self:FinishAutomatedRun("Automated /cs test complete; original book already active.")
+        self:FinishAutomatedRun("Automated test complete; original book already active.")
         return
     end
-    self:Append("Returning to original book with /cs " .. tostring(run.originalBook) .. "...")
+    self:Append("Returning to original book " .. tostring(run.originalBook)
+        .. " through " .. tostring(run.switchRoute) .. "...")
     local ok, reason = self:InvokeChangeSpec(run.originalBook)
     if not ok then
         self:FinishAutomatedRun("Test complete, but /cs restoration failed: " .. tostring(reason))
@@ -520,14 +576,14 @@ function SpecAPIProbe:PollTargetBook()
     local run = self.autoRun
     if not run then return end
     if self:GetActiveBook() == run.targetBook then
-        self:Append("/cs activated book " .. tostring(run.targetBook)
+        self:Append(tostring(run.switchRoute) .. " activated book " .. tostring(run.targetBook)
             .. "; waiting for build data to settle.")
         self:ScheduleAutomatedRun(2, self.CaptureSwitchedBook)
         return
     end
     if ARC:Now() >= run.deadline then
         self:Append("Book " .. tostring(run.targetBook)
-            .. " did not activate through /cs; stopping at the first unavailable book.",
+            .. " did not activate; stopping at the first unavailable book.",
             "|cffffcc55")
         self:RestoreOriginalBook()
         return
@@ -548,7 +604,8 @@ function SpecAPIProbe:AutomatedRunStep()
         return
     end
 
-    self:Append("Invoking Ascension command /cs " .. tostring(run.targetBook) .. "...")
+    self:Append("Invoking " .. tostring(run.switchRoute)
+        .. " for book " .. tostring(run.targetBook) .. "...")
     local ok, reason = self:InvokeChangeSpec(run.targetBook)
     self:Append("  " .. tostring(reason))
     if not ok then
@@ -565,11 +622,15 @@ function SpecAPIProbe:RunAutomatedTest()
         self:Append("Cannot determine the active specialization book.", "|cffff6666")
         return
     end
-    local slashHandler, slashKey = self:FindChangeSpecSlashHandler()
-    local hasChatParser = type(ChatEdit_ParseText) == "function"
-        and (type(ChatEdit_ChooseBoxForSend) == "function" or ChatFrameEditBox)
-    if not slashHandler and not hasChatParser then
-        self:Append("Neither a /cs handler nor Ascension's chat parser is available.",
+    local controls = self:FindVisibleSpecControls()
+    local controlCount = 0
+    for _ in pairs(controls) do controlCount = controlCount + 1 end
+    if controlCount == 0 and self.cachedSpecControls then
+        controls = self.cachedSpecControls
+        controlCount = self.cachedSpecControlCount or 0
+    end
+    if controlCount == 0 then
+        self:Append("Open Ascension's Available Specializations list before running the test.",
             "|cffff6666")
         return
     end
@@ -579,15 +640,14 @@ function SpecAPIProbe:RunAutomatedTest()
         originalBook = activeBook,
         targetBook = 1,
         captured = {},
-        slashKey = slashKey,
-        switchRoute = slashHandler and "SlashCmdList" or "ChatEdit_ParseText",
+        controls = controls,
+        switchRoute = "visible Available Specializations UI",
     }
-    self:Heading("ONE-CLICK AUTOMATED /cs SPEC TEST")
+    self:Heading("ONE-CLICK AUTOMATED SPEC/LOADOUT TEST")
     self:Append("Starting on book " .. tostring(activeBook)
-        .. ". Switching uses Ascension's registered /cs command handler, not "
-        .. "C_CharacterAdvancement.SwitchActiveChrSpec.", "|cff69ccf0")
-    self:Append("Detected /cs route: " .. tostring(self.autoRun.switchRoute)
-        .. (slashKey and (" key=" .. tostring(slashKey)) or ""))
+        .. ". Every switch is verified through GetActiveSpecID.", "|cff69ccf0")
+    self:Append("Detected switch route: " .. tostring(self.autoRun.switchRoute)
+        .. " controls=" .. tostring(controlCount))
     self:CaptureEnvironment()
     self:CaptureActiveBuild("starting book")
     if self.autoButton then self.autoButton:Disable() end
@@ -734,6 +794,9 @@ end
 function SpecAPIProbe:Initialize()
     self.lines = {}
     self.selectedSpec = 1
+    self.cachedSpecControls = nil
+    self.cachedSpecControlCount = 0
+    self.specControlScanElapsed = 0
 
     local frame = CreateFrame("Frame", "ActuallyARCSpecAPIProbeFrame", UIParent)
     frame:SetWidth(760)
@@ -800,7 +863,7 @@ function SpecAPIProbe:Initialize()
         self:ProbeSelectedBookReads()
     end)
     readButton:SetPoint("LEFT", matrixButton, "RIGHT", 5, 0)
-    local autoButton = createButton(frame, "Run all books via /cs", 150, function()
+    local autoButton = createButton(frame, "Run all books", 120, function()
         self:RunAutomatedTest()
     end)
     autoButton:SetPoint("LEFT", readButton, "RIGHT", 8, 0)
@@ -873,6 +936,13 @@ function SpecAPIProbe:Initialize()
             self:Append("Read-only probe. It never activates a specialization or changes talents.")
             self:ProbeActive()
             self:ProbeAPIs()
+        end
+    end)
+    frame:SetScript("OnUpdate", function(_, elapsed)
+        self.specControlScanElapsed = self.specControlScanElapsed + (tonumber(elapsed) or 0)
+        if self.specControlScanElapsed >= 0.25 then
+            self.specControlScanElapsed = 0
+            self:CacheVisibleSpecControls()
         end
     end)
     frame:SetScript("OnHide", function() self:StopEventCapture() end)

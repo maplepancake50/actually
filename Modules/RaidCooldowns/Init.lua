@@ -44,7 +44,14 @@ function ARC:Initialize()
             and type(ActuallyDB[legacyProfileKey]) == "table" then
             ActuallyDB.raidCooldowns = ActuallyDB[legacyProfileKey]
         end
+        local visibilityDefaultsMigrated = ActuallyDB.raidCooldowns
+            and ActuallyDB.raidCooldowns.arcBarsDefaultHiddenV1
         ActuallyDB.raidCooldowns = copyDefaults(self.Defaults.profile, ActuallyDB.raidCooldowns)
+        if not visibilityDefaultsMigrated then
+            ActuallyDB.raidCooldowns.testUI.shown = false
+            ActuallyDB.raidCooldowns.commanderUI.shown = false
+            ActuallyDB.raidCooldowns.arcBarsDefaultHiddenV1 = true
+        end
         ActuallyDB[legacyProfileKey] = nil
         self.db = { profile = ActuallyDB.raidCooldowns }
 
