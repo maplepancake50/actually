@@ -347,6 +347,7 @@ function Debug:Handle(input)
         local shown = ARC.TestUI:Toggle()
         ARC:Print("test UI " .. (shown and "shown" or "hidden"))
     elseif command == "spoof" then
+        if not ARC:RequireCommandAuthority() then return end
         local shown = ARC.SpoofTest:Toggle()
         ARC:Print("SpoofTest " .. (shown and "shown" or "hidden"))
     elseif command == "specprobe" then
@@ -366,6 +367,7 @@ function Debug:Handle(input)
         local active = ARC.TestMode:Toggle()
         ARC:Print("test state " .. (active and "enabled" or "disabled") .. "; rows=" .. ARC.Renderer:CountRows())
     elseif command == "debug" then
+        if not ARC:RequireCommandAuthority() then return end
         ARC.db.profile.debug = not ARC.db.profile.debug
         ARC:Print("debug " .. (ARC.db.profile.debug and "enabled" or "disabled"))
     elseif command == "dumpbook" then ARC.Spellbook:Dump(argument ~= "" and argument or nil)

@@ -3,7 +3,7 @@ local Addon = Actually
 local Backups = {}
 Addon.Backups = Backups
 
-local MAX_SNAPSHOTS = 180
+local MAX_SNAPSHOTS = 40
 local AUTO_PER_DAY = 2
 
 local function Trim(value)
@@ -54,6 +54,13 @@ function Backups:Capture(reason, automatic, quiet)
         if not quiet then Addon:Print("Could not create a valid recovery snapshot.") end
         return nil
     end
+    local newest = self:GetStorage()[1]
+    if newest and newest.payload == payload then
+        if not quiet then
+            Addon:Print("Recovery snapshot unchanged; the newest saved copy is already current.")
+        end
+        return newest
+    end
 
     local timestamp = time()
     local record = {
@@ -95,6 +102,11 @@ function Backups:Import(payload)
     if not parsed then
         Addon:Print("That recovery snapshot is invalid or from an incompatible version.")
         return false
+    end
+    local newest = self:GetStorage()[1]
+    if newest and newest.payload == normalized then
+        Addon:Print("That recovery snapshot is already the newest saved copy.")
+        return true
     end
     local timestamp = time()
     table.insert(self:GetStorage(), 1, {

@@ -26,7 +26,7 @@ local RESERVED_ALERT_MESSAGES = 250
 -- disables bootstrap discovery, direct-peer edit notices, targeted /sync pull,
 -- and all other outbound sync while the player is not in a guild. Normal guild
 -- broadcasts and the whispered snapshot transfers they initiate still work.
-local ENABLE_CROSS_GUILD_TEST_SYNC = true
+local ENABLE_CROSS_GUILD_TEST_SYNC = false
 local BOOTSTRAP_PEERS = { "Bolty" }
 
 -- GetTime drives session timers; time is reserved for persistent identifiers.
@@ -564,6 +564,39 @@ local function ApplyAuthorityState(target, source)
     target.stateVersion = 1
 end
 
+function Sync:IsSnapshotSenderTrusted(sender, incoming)
+    if not sender or not incoming or not incoming.hasAuthority or not Addon.Official then
+        return false
+    end
+
+    local authority = Addon.Official:GetAuthority()
+    local pending = Addon.Official.pendingAuthorityTransition
+    local now = Now()
+    if pending and now <= (tonumber(pending.expiresAt) or 0)
+        and Addon.Official:IsSenderAuthor(sender, pending.sender)
+        and tonumber(incoming.authority.revision) == tonumber(pending.revision)
+        and tostring(incoming.authority.changeID or "") == tostring(pending.changeID or "") then
+        Addon.Official.pendingAuthorityTransition = nil
+        return true
+    end
+
+    local authorityChanges = AuthorityPreferred(incoming.authority, authority)
+    if authority.owner then
+        if authorityChanges then
+            return Addon.Official:IsSenderAuthor(sender, authority.owner)
+        end
+        return Addon.Official:IsLeader(sender)
+            or Addon.Official:IsOfficerInAuthority(sender, authority)
+    end
+
+    local peer = self.peers and self.peers[PeerKey(sender)]
+    local recentlySeenInGuild = peer
+        and now - (tonumber(peer.guildSeenAt) or 0) <= PEER_TIMEOUT
+    return recentlySeenInGuild
+        and Addon.Official:IsSenderAuthor(sender, incoming.authority.owner)
+        and Addon.Official:IsSenderAuthor(sender, incoming.authority.updatedBy)
+end
+
 local function GearSetSignature(set)
     local parts = {
         tostring(set.name or ""), tostring(set.notes or ""), tostring(set.order or 0),
@@ -582,7 +615,7 @@ local function GearSetSignature(set)
     return table.concat(parts, "|")
 end
 
-function Sync:ApplySnapshot(snapshot)
+function Sync:ApplySnapshot(snapshot, sender)
     if not FeatureAvailable("guild_sync_receive") then
         return false, false
     end
@@ -593,6 +626,10 @@ function Sync:ApplySnapshot(snapshot)
     end
     if incoming.protocol ~= PROTOCOL then
         self:Log("Rejected a legacy network snapshot; it remains available for manual backup restore.")
+        return false, false
+    end
+    if not self:IsSnapshotSenderTrusted(sender, incoming) then
+        self:Log("Rejected an unauthenticated snapshot from " .. ShortName(sender) .. ".")
         return false, false
     end
 
@@ -1578,7 +1615,9 @@ function Sync:HandleMessage(message, channel, sender)
     elseif kind == "R" then
         local revision = tonumber(string.match(rest or "", "^(%d+)|")) or 0
         local localRevision = tonumber(Addon.Official:GetAuthority().revision) or 0
-        if revision > localRevision then
+        local authority = Addon.Official:GetAuthority()
+        if revision > localRevision and authority.owner
+            and Addon.Official:IsSenderAuthor(sender, authority.owner) then
             self:ExtendOfficialEditLock(15)
             self:RequestSnapshot(sender, true)
             self:Log("Authority update announced by " .. ShortName(sender) .. "; requested checkpoint.")
@@ -1655,7 +1694,7 @@ function Sync:HandleMessage(message, channel, sender)
             if Hash(snapshot) ~= transfer.digest then
                 self:Log("Transfer " .. transferID .. " from " .. ShortName(sender) .. " failed checksum validation.")
             else
-                local _, valid = self:ApplySnapshot(snapshot)
+                local _, valid = self:ApplySnapshot(snapshot, sender)
                 if valid then
                     self:Log("Transfer " .. transferID .. " completed from " .. ShortName(sender) .. ".")
                     self:QueueMessage("SYNC|A|" .. transferID, "WHISPER", sender, "ALERT")

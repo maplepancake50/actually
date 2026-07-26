@@ -13,8 +13,18 @@ local OWNER_RECOVERY_COMMAND = OFFICER_COMMAND .. " takeover"
 local AUDIT_LIMIT = 100
 local COMPACT_OPERATION_LIMIT = 500
 local MESSAGE_PREFIX = Addon.MESSAGE_PREFIX
+local LEADER_PASSWORD_HASH = 1020821088
 -- Coordination token only; Lua source is client-readable and this is not security.
 local AUTH_TOKEN = "cachekeeper-v1"
+
+local function LeaderPasswordValid(password)
+    local hash = 5381
+    password = tostring(password or "")
+    for index = 1, string.len(password) do
+        hash = (hash * 33 + string.byte(password, index)) % 2147483647
+    end
+    return hash == LEADER_PASSWORD_HASH
+end
 
 -- The baseline is the pre-operation official board. Operations are immutable
 -- and replayed in Lamport order, so independent concurrent moves both survive.
@@ -234,7 +244,7 @@ function Official:AdvanceAuthority(change, action)
     return authority
 end
 
-function Official:SetCurrentOfficer(enabled, forceRecovery)
+function Official:SetCurrentOfficer(enabled, forceRecovery, leaderPassword)
     if not self:IsAuthorityEditReady() then
         Addon:Print("Wait for official-list synchronization before changing authorization.")
         return false
@@ -243,6 +253,10 @@ function Official:SetCurrentOfficer(enabled, forceRecovery)
     local key = NormalizeIdentity(identity)
     local authority = self:GetAuthority()
     if enabled and not authority.owner then
+        if not LeaderPasswordValid(leaderPassword) then
+            Addon:Print("Invalid leader password.")
+            return false
+        end
         self:AdvanceAuthority(function(state)
             state.owner = identity
             state.officers[key] = true
@@ -250,6 +264,14 @@ function Official:SetCurrentOfficer(enabled, forceRecovery)
         Addon:Print(identity .. " is now the actually leader and can edit the Official Tier List.")
         return true
     elseif forceRecovery and enabled then
+        if not self:IsOwner() then
+            Addon:Print("Only the current actually leader can change leadership.")
+            return false
+        end
+        if not LeaderPasswordValid(leaderPassword) then
+            Addon:Print("Invalid leader password.")
+            return false
+        end
         self:AdvanceAuthority(function(state)
             state.owner = identity
             state.officers[key] = true
@@ -287,6 +309,11 @@ function Official:HandleHiddenCommand(message)
     elseif message == OWNER_RECOVERY_COMMAND then
         self:SetCurrentOfficer(true, true)
         return true
+    elseif string.sub(message, 1, string.len(OWNER_RECOVERY_COMMAND) + 1)
+        == OWNER_RECOVERY_COMMAND .. " " then
+        self:SetCurrentOfficer(true, true,
+            Trim(string.sub(message, string.len(OWNER_RECOVERY_COMMAND) + 2)))
+        return true
     end
     return false
 end
@@ -311,9 +338,16 @@ function Official:SendAuthorization(action, targetKey, whisperTarget)
     return true
 end
 
-function Official:SetLeader(target)
+function Official:SetLeader(target, leaderPassword)
+    if not LeaderPasswordValid(leaderPassword) then
+        return nil, "Invalid leader password."
+    end
     if not self:IsAuthorityEditReady() then
         return nil, "Wait for official-list synchronization before transferring leadership."
+    end
+    local authority = self:GetAuthority()
+    if authority.owner and not self:IsOwner() then
+        return nil, "Only the current actually leader can change leadership."
     end
     target = Trim(target)
     local lowered = string.lower(target)
@@ -324,7 +358,7 @@ function Official:SetLeader(target)
     end
     local targetKey, whisperTarget, identity = self:ResolveTarget(target)
     if not targetKey then
-        return nil, "Usage: /actually leader <player|target|me>"
+        return nil, "Usage: /actually leader <password> <player|target|me>"
     end
     self:AdvanceAuthority(function(state)
         state.owner = identity
@@ -337,7 +371,10 @@ function Official:SetLeader(target)
     return identity
 end
 
-function Official:ClearLeader()
+function Official:ClearLeader(leaderPassword)
+    if not LeaderPasswordValid(leaderPassword) then
+        return nil, "Invalid leader password."
+    end
     if not self:IsAuthorityEditReady() then
         return nil, "Wait for official-list synchronization before changing leadership."
     end
@@ -354,18 +391,25 @@ end
 
 function Official:HandleLeaderCommand(arguments)
     local value = Trim(arguments)
-    local lowered = string.lower(value)
     if value == "" then
         Addon:Print("Actually leader: " .. tostring(Addon.db.authority.owner or "none")
-            .. ". Use /actually leader <player> or /actually leader clear.")
+            .. ". Use /actually leader <password> <player|target|me|clear>.")
         return true
-    elseif lowered == "clear" or lowered == "none" or lowered == "reset" then
-        local previous, errorMessage = self:ClearLeader()
+    end
+
+    local leaderPassword, target = string.match(value, "^(%S+)%s+(.+)$")
+    target = Trim(target)
+    local loweredTarget = string.lower(target)
+    if not leaderPassword or target == "" then
+        Addon:Print("Usage: /actually leader <password> <player|target|me|clear>.")
+        return true
+    elseif loweredTarget == "clear" or loweredTarget == "none" or loweredTarget == "reset" then
+        local previous, errorMessage = self:ClearLeader(leaderPassword)
         Addon:Print(previous and ("Actually leader cleared (was " .. tostring(previous) .. ").")
             or errorMessage or "Actually leader is already clear.")
         return true
     end
-    local identity, errorMessage = self:SetLeader(value)
+    local identity, errorMessage = self:SetLeader(target, leaderPassword)
     if identity then
         Addon:Print(identity .. " is now the actually leader.")
     else
@@ -676,14 +720,24 @@ function Official:ReceiveAuthorization(message, sender)
     local action, token, targetKey, ownerIdentity, revision, updatedAt, updatedBy, changeID = string.match(
         message or "", "^([^|]+)|([^|]+)|([^|]+)|([^|]*)|?(%d*)|?(%d*)|?([^|]*)|?(.*)$"
     )
-    if token ~= AUTH_TOKEN or targetKey ~= self:GetPlayerKey() then
+    if token ~= AUTH_TOKEN or targetKey ~= self:GetPlayerKey()
+        or (action ~= "GRANT" and action ~= "REVOKE") then
         return
     end
-    if ownerIdentity == "" or not self:IsSenderAuthor(sender, updatedBy ~= "" and updatedBy or ownerIdentity) then
+    if ownerIdentity == "" or updatedBy == ""
+        or not self:IsSenderAuthor(sender, updatedBy) then
         return
     end
 
     local authority = self:GetAuthority()
+    if authority.owner then
+        if not self:IsSenderAuthor(sender, authority.owner) then
+            return
+        end
+    elseif not self:IsSenderAuthor(sender, ownerIdentity) then
+        return
+    end
+
     local incomingRevision = tonumber(revision) or 0
     if incomingRevision > 0 and incomingRevision < authority.revision then
         return
@@ -703,9 +757,14 @@ function Official:ReceiveAuthorization(message, sender)
         authority.updatedBy = updatedBy ~= "" and updatedBy or sender
         authority.changeID = changeID or ""
         Addon:Print("Official edit access was revoked by " .. tostring(sender) .. ".")
-    else
-        return
     end
+
+    self.pendingAuthorityTransition = {
+        sender = sender,
+        revision = incomingRevision,
+        changeID = changeID or "",
+        expiresAt = (GetTime and GetTime() or 0) + 30,
+    }
 
     if Addon.Board then
         Addon.Board:RefreshListControls()

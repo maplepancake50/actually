@@ -2,7 +2,7 @@
 ## Title: actually
 ## Notes: Ascension Crow's cache utility + guild addon
 ## Author: Bolty
-## Version: 0.3.6
+## Version: 0.3.7
 ## SavedVariables: ActuallyDB
 ## OptionalDeps: TurboPlates
 

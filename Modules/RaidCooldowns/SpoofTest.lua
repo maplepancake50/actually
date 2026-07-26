@@ -36,6 +36,10 @@ function SpoofTest:GetSpellCooldownDuration(spellID)
 end
 
 function SpoofTest:Use(spellID)
+    if not ARC:HasCommandAuthority() then
+        ARC:Print("only an actually officer or the actually leader can use SpoofTest")
+        return false
+    end
     if not ARC.db.profile.debug then
         ARC:Print("SpoofTest is disabled; use /arc debug before sending fake state")
         return false
