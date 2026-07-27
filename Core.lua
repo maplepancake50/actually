@@ -520,6 +520,5 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
         end
     end
 
-    Addon:Print("Prototype loaded. Type /actually to open the board.")
     self:UnregisterEvent("ADDON_LOADED")
 end)

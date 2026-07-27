@@ -95,9 +95,6 @@ function ARC:Initialize()
     if Actually.CacheTips and Actually.CacheTips.RefreshARCAlertControls then
         Actually.CacheTips:RefreshARCAlertControls()
     end
-    self:Print("|cffff9f1a========== WORK IN PROGRESS ==========|r")
-    self:Print("loaded; /act arc for commands")
-    self:Print("|cffff9f1a======================================|r")
 end
 
 function Events.ADDON_LOADED(loadedAddon)

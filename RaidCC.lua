@@ -3,7 +3,10 @@ local Addon = Actually
 Addon.RaidCC = Addon.RaidCC or {}
 local RaidCC = Addon.RaidCC
 
-local HEARTBEAT_INTERVAL = 0.30
+-- Nameplates and auras are updated from events. This slow heartbeat is only a
+-- safety net for recycled unit tokens, late TurboPlates frames, and runtime
+-- compatibility changes.
+local HEARTBEAT_INTERVAL = 2.00
 local ARROW_TEXTURE = "Interface\\AddOns\\Actually\\Textures\\RaidCCArrow.tga"
 local WARNING_INTERVAL = 30
 local MIN_ARROW_SIZE = 18
@@ -154,6 +157,8 @@ RaidCC.lastThresholdSoundAt = type(RaidCC.lastThresholdSoundAt) == "table"
 RaidCC.affectedFriendlyCounts = type(RaidCC.affectedFriendlyCounts) == "table"
     and RaidCC.affectedFriendlyCounts or {}
 RaidCC.friendlyAuraCounts = RaidCC.friendlyAuraCounts or {}
+RaidCC.friendlyAuraKindsByGUID = type(RaidCC.friendlyAuraKindsByGUID) == "table"
+    and RaidCC.friendlyAuraKindsByGUID or {}
 RaidCC.settingsRefreshing = false
 
 local function ClearTable(value)
@@ -233,11 +238,6 @@ local function RaidCount()
         return GetNumGroupMembers() or 0
     end
     return GetNumRaidMembers and GetNumRaidMembers() or 0
-end
-
-local function IsFriendlyGroupUnitToken(unit)
-    return unit == "player"
-        or (type(unit) == "string" and string.match(unit, "^raid%d+$") ~= nil)
 end
 
 local function GetPlateForUnit(unit)
@@ -483,7 +483,7 @@ function RaidCC:AddCustomEffect(spellID, colorKey)
     }
     self:BuildEffectRegistry()
     self.db.selectedEffectKey = effectKey
-    self:UpdateSoundThreshold(false)
+    self:RebuildFriendlyAuraCache(false)
     self:RefreshTrackedArrows()
     self:RefreshSettingsPanel()
     self:Print(name .. " added to Mass Dispel Helper.")
@@ -500,7 +500,7 @@ function RaidCC:RemoveSelectedCustomEffect()
     self.lastThresholdSoundAt[effect.key] = nil
     self.affectedFriendlyCounts[effect.key] = nil
     self:BuildEffectRegistry()
-    self:UpdateSoundThreshold(false)
+    self:RebuildFriendlyAuraCache(false)
     self:RefreshTrackedArrows()
     self:RefreshSettingsPanel()
     self:Print(name .. " removed from Mass Dispel Helper.")
@@ -684,30 +684,109 @@ function RaidCC:GetUnitTrackedAuraKinds(unit)
     return kinds
 end
 
-function RaidCC:BuildFriendlyAuraSummary()
-    local summary = { byKind = {} }
-    local seenGUIDs = {}
-    for index = 1, RaidCount() do
-        local unit = "raid" .. index
-        local guid = UnitExists(unit) and UnitGUID(unit)
-        if guid
-            and not seenGUIDs[guid]
-            and (not UnitIsPlayer or UnitIsPlayer(unit)) then
-            seenGUIDs[guid] = true
-            local kinds = self:GetUnitTrackedAuraKinds(unit)
-            for kind in pairs(kinds) do
-                summary.byKind[kind] = (summary.byKind[kind] or 0) + 1
+local function AuraKindSetsEqual(left, right)
+    for kind in pairs(left or {}) do
+        if not right or right[kind] ~= true then return false end
+    end
+    for kind in pairs(right or {}) do
+        if not left or left[kind] ~= true then return false end
+    end
+    return true
+end
+
+function RaidCC:AdjustFriendlyAuraCounts(kinds, amount)
+    for kind in pairs(kinds or {}) do
+        local nextCount = (self.friendlyAuraCounts[kind] or 0) + amount
+        self.friendlyAuraCounts[kind] = nextCount > 0 and nextCount or nil
+    end
+end
+
+function RaidCC:RebuildFriendlyAuraCache(allowSound)
+    ClearTable(self.friendlyAuraKindsByGUID)
+    ClearTable(self.friendlyAuraCounts)
+
+    if self.runtimeActive then
+        local seenGUIDs = {}
+        for index = 1, RaidCount() do
+            local unit = "raid" .. index
+            local guid = UnitExists(unit) and UnitGUID(unit)
+            if guid
+                and self.raidGUIDs[guid] == true
+                and not seenGUIDs[guid]
+                and (not UnitIsPlayer or UnitIsPlayer(unit)) then
+                seenGUIDs[guid] = true
+                local kinds = self:GetUnitTrackedAuraKinds(unit)
+                self.friendlyAuraKindsByGUID[guid] = kinds
+                self:AdjustFriendlyAuraCounts(kinds, 1)
             end
         end
+    end
+
+    self:Debug("friendly aura cache rebuilt units="
+        .. tostring(CountTable(self.friendlyAuraKindsByGUID)))
+    self:UpdateSoundThreshold(allowSound)
+end
+
+function RaidCC:UpdateFriendlyUnitAuraCache(unit)
+    if not self.runtimeActive
+        or not unit
+        or not UnitExists(unit)
+        or (UnitIsPlayer and not UnitIsPlayer(unit)) then
+        return false
+    end
+
+    local guid = UnitGUID(unit)
+    if not guid or self.raidGUIDs[guid] ~= true then
+        return false
+    end
+
+    local previous = self.friendlyAuraKindsByGUID[guid] or {}
+    local current = self:GetUnitTrackedAuraKinds(unit)
+    if AuraKindSetsEqual(previous, current) then
+        -- Record even an empty set so subsequent irrelevant UNIT_AURA events
+        -- can return without any nameplate or threshold work.
+        self.friendlyAuraKindsByGUID[guid] = current
+        return false, guid
+    end
+
+    local changedKinds = {}
+    for kind in pairs(previous) do changedKinds[kind] = true end
+    for kind in pairs(current) do changedKinds[kind] = true end
+
+    local arrowThresholdCrossed = false
+    for kind in pairs(changedKinds) do
+        local before = self.friendlyAuraCounts[kind] or 0
+        local after = before
+        if previous[kind] and not current[kind] then
+            after = before - 1
+        elseif current[kind] and not previous[kind] then
+            after = before + 1
+        end
+        local settings = self:GetEffectSettings(kind)
+        if settings and settings.arrowEnabled == true
+            and ((before >= settings.arrowThreshold)
+                ~= (after >= settings.arrowThreshold)) then
+            arrowThresholdCrossed = true
+        end
+    end
+
+    self:AdjustFriendlyAuraCounts(previous, -1)
+    self:AdjustFriendlyAuraCounts(current, 1)
+    self.friendlyAuraKindsByGUID[guid] = current
+    return true, guid, arrowThresholdCrossed
+end
+
+function RaidCC:BuildFriendlyAuraSummary()
+    local summary = { byKind = {} }
+    for kind, count in pairs(self.friendlyAuraCounts) do
+        summary.byKind[kind] = count
     end
     return summary
 end
 
 function RaidCC:CountFriendlySoundMatches(effectKey)
-    local summary = self:BuildFriendlyAuraSummary()
-    self.friendlyAuraCounts = summary.byKind
     effectKey = effectKey or self:GetSelectedEffectKey()
-    return summary.byKind[effectKey] or 0
+    return self.friendlyAuraCounts[effectKey] or 0
 end
 
 function RaidCC:ShouldDisplayAuraKind(kind)
@@ -719,12 +798,10 @@ function RaidCC:ShouldDisplayAuraKind(kind)
 end
 
 function RaidCC:UpdateSoundThreshold(allowSound)
-    local summary = self:BuildFriendlyAuraSummary()
-    self.friendlyAuraCounts = summary.byKind
     for _, effect in ipairs(self.effectOrder) do
         local key = effect.key
         local settings = self:GetEffectSettings(key)
-        local count = summary.byKind[key] or 0
+        local count = self.friendlyAuraCounts[key] or 0
         self.affectedFriendlyCounts[key] = count
         if self.runtimeActive and settings.soundEnabled == true then
             local reached = count >= settings.soundThreshold
@@ -992,15 +1069,72 @@ function RaidCC:CreateArrowVisual(parent, anchor)
     arrow:SetVertexColor(1, 1, 1, 1)
     arrowVisual.arrow = arrow
 
-    arrowVisual:SetScript("OnUpdate", function(self)
-        if self.pulseEnabled and GetTime then
-            self:SetAlpha(0.68 + 0.32 * ((math.sin(GetTime() * 6) + 1) * 0.5))
-        elseif self:GetAlpha() ~= 1 then
-            self:SetAlpha(1)
+    if arrowVisual.CreateAnimationGroup then
+        local ok, pulse = pcall(function()
+            local group = arrowVisual:CreateAnimationGroup()
+            if not group or not group.CreateAnimation
+                or not group.SetLooping or not group.Play or not group.Stop then
+                return nil
+            end
+
+            local fadeOut = group:CreateAnimation("Alpha")
+            local fadeIn = group:CreateAnimation("Alpha")
+            if not fadeOut or not fadeIn then return nil end
+
+            fadeOut:SetChange(-0.32)
+            fadeOut:SetDuration(0.35)
+            fadeOut:SetOrder(1)
+
+            fadeIn:SetChange(0.32)
+            fadeIn:SetDuration(0.35)
+            fadeIn:SetOrder(2)
+
+            group:SetLooping("REPEAT")
+            return group
+        end)
+        if ok and pulse then
+            arrowVisual.pulseAnimation = pulse
         end
-    end)
+    end
     arrowVisual:Hide()
     return arrowVisual
+end
+
+local function SetArrowPulseRunning(visual, shouldPulse)
+    local pulse = visual and visual.pulseAnimation
+    if pulse then
+        if shouldPulse then
+            if not pulse.IsPlaying or not pulse:IsPlaying() then
+                visual:SetAlpha(1)
+                pulse:Play()
+            end
+        else
+            if not pulse.IsPlaying or pulse:IsPlaying() then
+                pulse:Stop()
+            end
+            visual:SetAlpha(1)
+        end
+        if visual.SetScript then
+            visual:SetScript("OnUpdate", nil)
+        end
+        return
+    end
+
+    -- Fallback for older clients without AnimationGroup support. Unlike the
+    -- previous implementation, this runs only while a pulsing arrow is shown.
+    if visual and visual.SetScript then
+        if shouldPulse then
+            visual:SetScript("OnUpdate", function(self)
+                if GetTime then
+                    self:SetAlpha(0.68
+                        + 0.32 * ((math.sin(GetTime() * 6) + 1) * 0.5))
+                end
+            end)
+        else
+            visual:SetScript("OnUpdate", nil)
+            visual:SetAlpha(1)
+        end
+    end
 end
 
 function RaidCC:ApplyArrowVisualSettings(overlay)
@@ -1022,9 +1156,7 @@ function RaidCC:ApplyArrowVisualSettings(overlay)
     else
         visual.arrowGlow:Hide()
     end
-    if not visual.pulseEnabled then
-        visual:SetAlpha(1)
-    end
+    SetArrowPulseRunning(visual, visual:IsShown() and visual.pulseEnabled)
 end
 
 function RaidCC:ShowArrowVisual(overlay, kind)
@@ -1039,8 +1171,8 @@ end
 
 function RaidCC:HideArrowVisual(overlay)
     if not overlay or not overlay.arrowVisual then return end
+    SetArrowPulseRunning(overlay.arrowVisual, false)
     overlay.arrowVisual:Hide()
-    overlay.arrowVisual:SetAlpha(1)
     overlay.arrowVisual.arrowGlow:Hide()
 end
 
@@ -1069,6 +1201,16 @@ function RaidCC:RefreshTrackedArrows()
     for nameplate in pairs(self.visiblePlates or {}) do
         local state = nameplate._actuallyRaidCCState
         if state and state.active then
+            self:UpdateArrow(state)
+        end
+    end
+end
+
+function RaidCC:RefreshTrackedArrowForGUID(guid)
+    if not guid then return end
+    for nameplate in pairs(self.visiblePlates or {}) do
+        local state = nameplate._actuallyRaidCCState
+        if state and state.active and state.guid == guid then
             self:UpdateArrow(state)
         end
     end
@@ -2025,6 +2167,25 @@ function RaidCC:FindTrackedAura(unit, requireDisplayThreshold)
     return false, nil, nil, nil
 end
 
+function RaidCC:GetCachedDisplayAuraKind(guid)
+    local kinds = guid and self.friendlyAuraKindsByGUID[guid]
+    if not kinds then return nil, false end
+
+    local bestKind
+    local bestPriority = 0
+    for kind in pairs(kinds) do
+        if self:ShouldDisplayAuraKind(kind) then
+            local effect = self.effectsByKey[kind]
+            local priority = effect and effect.priority or 0
+            if priority > bestPriority then
+                bestKind = kind
+                bestPriority = priority
+            end
+        end
+    end
+    return bestKind, true
+end
+
 function RaidCC:UpdateArrow(state)
     local valid = state.active
         and state.unit
@@ -2033,7 +2194,13 @@ function RaidCC:UpdateArrow(state)
         and self.raidGUIDs[state.guid] == true
     local hasAura, kind, spellName, spellID
     if valid then
-        hasAura, kind, spellName, spellID = self:FindTrackedAura(state.unit, true)
+        local cacheAvailable
+        kind, cacheAvailable = self:GetCachedDisplayAuraKind(state.guid)
+        if cacheAvailable then
+            hasAura = kind ~= nil
+        else
+            hasAura, kind, spellName, spellID = self:FindTrackedAura(state.unit, true)
+        end
     end
     if hasAura then
         self:ShowArrowVisual(state.overlay, kind)
@@ -2274,7 +2441,7 @@ function RaidCC:EnterActiveMode()
             return
         end
         self:RebuildRaidGUIDCache()
-        self:UpdateSoundThreshold(true)
+        self:RebuildFriendlyAuraCache(true)
         self:ReevaluateVisiblePlates()
         return
     end
@@ -2289,7 +2456,7 @@ function RaidCC:EnterActiveMode()
         return
     end
     self:RebuildRaidGUIDCache()
-    self:UpdateSoundThreshold(true)
+    self:RebuildFriendlyAuraCache(true)
     self:ReevaluateVisiblePlates()
 end
 
@@ -2301,6 +2468,7 @@ function RaidCC:LeaveActiveMode()
     ClearTable(self.soundThresholdReached)
     ClearTable(self.affectedFriendlyCounts)
     ClearTable(self.friendlyAuraCounts)
+    ClearTable(self.friendlyAuraKindsByGUID)
     self:RefreshSettingsStatus()
     self:Debug("leaving active raid mode")
     self:RestoreCVars(true)
@@ -2360,11 +2528,6 @@ function RaidCC:OnHeartbeat(elapsed)
                     and self.raidGUIDs[state.guid] == true
                 if not valid then
                     self:SafeEvaluatePlate(nameplate, state.unit)
-                else
-                    self:InstallHooks(nameplate)
-                    self:SuppressTurboPlates(nameplate)
-                    self:CopyNameAppearance(nameplate, state.unit, state.overlay)
-                    self:UpdateArrow(state)
                 end
             end
         end
@@ -2386,24 +2549,28 @@ function RaidCC:OnUnitChanged(unit, auraOnly)
         and state.active
         and state.unit == unit
         and UnitGUID(unit) == state.guid
-    local relevantAuraChanged = auraOnly
-        and self.runtimeActive
-        and (IsFriendlyGroupUnitToken(unit) or validState)
-    if relevantAuraChanged then
-        -- Both thresholds inspect raid/BG unit auras directly, so neither
-        -- depends on every affected player having a visible nameplate.
-        self:UpdateSoundThreshold(true)
-        self:RefreshTrackedArrows()
+    if auraOnly and self.runtimeActive then
+        local changed, guid, arrowThresholdCrossed =
+            self:UpdateFriendlyUnitAuraCache(unit)
+        if changed then
+            -- Group totals are adjusted from only this unit. A threshold
+            -- crossing can affect several visible plates; otherwise only this
+            -- player's arrow needs refreshing.
+            self:UpdateSoundThreshold(true)
+            if arrowThresholdCrossed then
+                self:RefreshTrackedArrows()
+            else
+                self:RefreshTrackedArrowForGUID(guid)
+            end
+            return
+        end
+        -- No tracked effect changed, so neither totals nor arrows need work.
         return
     end
     if not validState then
         return
     end
-    if auraOnly then
-        self:UpdateArrow(state)
-    else
-        self:CopyNameAppearance(nameplate, unit, state.overlay)
-    end
+    self:CopyNameAppearance(nameplate, unit, state.overlay)
 end
 
 function RaidCC:Initialize()
