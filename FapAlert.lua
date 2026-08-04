@@ -207,10 +207,8 @@ end
 function FapAlert:Initialize()
     if self.initialized then return end
     self.initialized = true
-    self:Create()
 
     local events = CreateFrame("Frame")
-    events:RegisterEvent("CHAT_MSG_ADDON")
     events:SetScript("OnEvent", function(_, event, prefix, message, channel, sender)
         if event == "CHAT_MSG_ADDON" and prefix == Addon.MESSAGE_PREFIX
             and string.sub(message or "", 1, string.len(MESSAGE_KIND) + 1) == MESSAGE_KIND .. "|" then
@@ -218,4 +216,7 @@ function FapAlert:Initialize()
         end
     end)
     self.eventFrame = events
+    -- The toggle controls the visual only. Every officer must continue to
+    -- receive protocol messages so the raid-wide cooldown stays synchronized.
+    events:RegisterEvent("CHAT_MSG_ADDON")
 end

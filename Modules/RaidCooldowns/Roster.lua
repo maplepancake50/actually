@@ -74,6 +74,30 @@ function Roster:Scan()
     end
     if ARC.Requests and ARC.Requests.initialized then ARC.Requests:OnRosterChanged() end
     if ARC.Bundles and ARC.Bundles.initialized then ARC.Bundles:OnRosterChanged() end
+    if ARC.Combos and ARC.Combos.initialized then ARC.Combos:OnRosterChanged() end
+end
+
+function Roster:UpdateUnitStatus(unit)
+    if not unit or not UnitExists or not UnitExists(unit) then return false end
+    local guid = UnitGUID and UnitGUID(unit)
+    local identity = guid and self.byGUID[guid]
+    if not identity then return false end
+    local wasConnected = identity.connected
+    local connected = not UnitIsConnected or UnitIsConnected(unit) and true or false
+    local dead = UnitIsDeadOrGhost and UnitIsDeadOrGhost(unit) and true or false
+    if identity.connected == connected and identity.dead == dead then return false end
+
+    identity.connected = connected
+    identity.dead = dead
+    identity.unit = unit
+    local player = ARC.State and ARC.State.players and ARC.State.players[identity.key]
+    if player then
+        player.connected = connected
+        player.dead = dead
+        player.unit = unit
+        ARC.State:Changed("unit status")
+    end
+    return true, connected, wasConnected
 end
 
 function Roster:GetPlayer()

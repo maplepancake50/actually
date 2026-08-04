@@ -379,7 +379,9 @@ function Backups:HandleCommand(argument)
         local index = tonumber(string.match(lower, "^restore%s+(%d+)"))
         self:RestoreRecord(self:GetStorage()[index])
     else
-        Addon:Print("Recovery: /actually backup, backup now, backup import, backup export <number>, backup restore <number> confirm")
+        if Addon.CanViewCommandHelp and Addon:CanViewCommandHelp() then
+            Addon:Print("Recovery: /actually backup, backup now, backup import, backup export <number>, backup restore <number> confirm")
+        end
     end
     return true
 end

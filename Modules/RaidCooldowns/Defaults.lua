@@ -25,6 +25,24 @@ ARC.Defaults = {
             x = 0,
             y = 0,
         },
+        diagnosticsUI = {
+            point = "CENTER",
+            x = 0,
+            y = 0,
+        },
+        activity = {
+            enabled = true,
+            maxEvents = 500,
+            events = {},
+            sequence = 0,
+        },
+        activityUI = {
+            point = "CENTER",
+            relativePoint = "CENTER",
+            x = 0,
+            y = 0,
+            filter = "timeline",
+        },
         requests = {
             timeout = 8,
             sound = true,
@@ -69,6 +87,13 @@ ARC.Defaults = {
             locked = true,
         },
         cooldownBundles = {},
+        timedCombos = {},
+        comboUI = {
+            point = "CENTER",
+            x = 0,
+            y = 0,
+            scale = 1,
+        },
         commanderUI = {
             shown = false,
             point = "CENTER",

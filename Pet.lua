@@ -1946,6 +1946,7 @@ function Pet:Show()
         return
     end
     Addon.db.pet.shown = true
+    self:SetRuntimeActive(true)
     self.frame:Show()
     self:WakeFromIdle()
     if Addon.Board and Addon.Board.petCheckbox then
@@ -1963,6 +1964,7 @@ function Pet:Hide(keepAnalyzerOpen)
     Addon.db.pet.shown = false
     self:HideThought(false)
     self.frame:Hide()
+    self:SetRuntimeActive(false)
     if Addon.Analyzer and not keepAnalyzerOpen then
         if Addon.Analyzer.running and Addon.Analyzer.Cancel then
             Addon.Analyzer:Cancel()
@@ -1973,6 +1975,25 @@ function Pet:Hide(keepAnalyzerOpen)
     if Addon.Board and Addon.Board.petCheckbox then
         Addon.Board.petCheckbox:SetChecked(false)
     end
+end
+
+function Pet:SetRuntimeActive(active)
+    if not self.frame then return end
+    for _, event in ipairs({
+        "UNIT_SPELLCAST_START", "UNIT_SPELLCAST_STOP",
+        "UNIT_SPELLCAST_FAILED", "UNIT_SPELLCAST_INTERRUPTED",
+        "UNIT_SPELLCAST_SUCCEEDED", "UNIT_SPELLCAST_CHANNEL_START",
+        "UNIT_SPELLCAST_CHANNEL_STOP",
+    }) do
+        if active then
+            self.frame:RegisterEvent(event)
+        else
+            self.frame:UnregisterEvent(event)
+        end
+    end
+    self.frame:SetScript("OnUpdate", active and function(_, elapsed)
+        Pet:Update(elapsed)
+    end or nil)
 end
 
 function Pet:Toggle()
@@ -2410,19 +2431,8 @@ function Pet:Create()
     self:CreateSnoreEffect(button)
     self:ApplyPosition()
     self:ResetTimers()
-    button:RegisterEvent("UNIT_SPELLCAST_START")
-    button:RegisterEvent("UNIT_SPELLCAST_STOP")
-    button:RegisterEvent("UNIT_SPELLCAST_FAILED")
-    button:RegisterEvent("UNIT_SPELLCAST_INTERRUPTED")
-    button:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
-    button:RegisterEvent("UNIT_SPELLCAST_CHANNEL_START")
-    button:RegisterEvent("UNIT_SPELLCAST_CHANNEL_STOP")
     button:SetScript("OnEvent", function(_, event, ...)
         Pet:HandleSpellcastEvent(event, ...)
-    end)
-
-    button:SetScript("OnUpdate", function(_, elapsed)
-        Pet:Update(elapsed)
     end)
 
     button:SetScript("OnMouseDown", function()
@@ -2471,7 +2481,9 @@ function Pet:Create()
 
     if Addon.db.pet.shown == false then
         button:Hide()
+        self:SetRuntimeActive(false)
     else
         button:Show()
+        self:SetRuntimeActive(true)
     end
 end

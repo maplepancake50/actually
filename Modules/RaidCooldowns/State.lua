@@ -7,7 +7,7 @@ local function clearTable(tbl)
     for key in pairs(tbl) do tbl[key] = nil end
 end
 
-local function copySpell(canonicalID, value, confidence, now)
+local function writeSpell(target, canonicalID, value, confidence, now)
     local duration = math.max(0, tonumber(value.duration) or 0)
     local remaining = math.max(0, tonumber(value.remaining) or 0)
     if duration > 0 and remaining > duration + 2 then duration = remaining end
@@ -15,20 +15,32 @@ local function copySpell(canonicalID, value, confidence, now)
     if not cooldownStartedAt and duration > 0 and remaining > 0 then
         cooldownStartedAt = now - math.max(0, duration - remaining)
     end
-    return {
-        spellID = canonicalID,
-        known = true,
-        readyAt = remaining > 0 and (now + remaining) or 0,
-        remaining = remaining,
-        duration = duration,
-        cooldownStartedAt = cooldownStartedAt,
-        charges = tonumber(value.charges),
-        maxCharges = tonumber(value.maxCharges),
-        chargeRemaining = math.max(0, tonumber(value.chargeRemaining) or 0),
-        target = value.target,
-        confidence = confidence,
-        lastUpdate = now,
-    }
+    target = target or {}
+    target.spellID = canonicalID
+    target.known = true
+    target.readyAt = remaining > 0 and (now + remaining) or 0
+    target.remaining = remaining
+    target.duration = duration
+    target.cooldownStartedAt = cooldownStartedAt
+    target.charges = tonumber(value.charges)
+    target.maxCharges = tonumber(value.maxCharges)
+    target.chargeRemaining = math.max(0, tonumber(value.chargeRemaining) or 0)
+    target.target = value.target
+    target.confidence = confidence
+    target.lastUpdate = now
+    return target
+end
+
+local function copySpell(canonicalID, value, confidence, now)
+    return writeSpell({}, canonicalID, value, confidence, now)
+end
+
+local function spellActive(value, now)
+    if not value then return false end
+    if (tonumber(value.readyAt) or 0) > now then return true end
+    local charges = tonumber(value.charges)
+    local maximum = tonumber(value.maxCharges)
+    return maximum and maximum > 0 and charges and charges < maximum or false
 end
 
 function State:Initialize()
@@ -87,14 +99,17 @@ function State:UpdateLocalCooldown(playerKey, canonicalID, value)
     if not player or player.source ~= "SELF" or not player.spells[canonicalID] then return false end
     local now = ARC:Now()
     local old = player.spells[canonicalID]
-    local updated = copySpell(canonicalID, value, "SELF", now)
-    updated.target = value.target or old.target
-    local changed = math.abs((old.readyAt or 0) - updated.readyAt) > 0.25
-        or math.abs((old.duration or 0) - updated.duration) > 0.25
-        or old.charges ~= updated.charges
-        or old.maxCharges ~= updated.maxCharges
-        or old.target ~= updated.target
-    player.spells[canonicalID] = updated
+    local oldReadyAt = old.readyAt or 0
+    local oldDuration = old.duration or 0
+    local oldCharges = old.charges
+    local oldMaxCharges = old.maxCharges
+    local oldTarget = old.target
+    local updated = writeSpell(old, canonicalID, value, "SELF", now)
+    local changed = math.abs(oldReadyAt - updated.readyAt) > 0.25
+        or math.abs(oldDuration - updated.duration) > 0.25
+        or oldCharges ~= updated.charges
+        or oldMaxCharges ~= updated.maxCharges
+        or oldTarget ~= updated.target
     player.lastSeen = now
     if updated.duration > 2 then self.lastEffectiveDuration[canonicalID] = updated.duration end
     if changed then self:Changed("local cooldown") end
@@ -116,9 +131,15 @@ function State:ApplyReport(playerKey, identity, session, sequence, capabilityRev
     self.peers[playerKey] = peer
 
     local player = self:GetOrCreate(playerKey, identity, "REPORT")
+    local previousSpells = player.spells or {}
     local replacement = {}
     for canonicalID, value in pairs(rows) do
         replacement[canonicalID] = copySpell(canonicalID, value, "REPORT", now)
+        local previous = previousSpells[canonicalID]
+        if previous and previous.target and spellActive(previous, now)
+            and spellActive(replacement[canonicalID], now) then
+            replacement[canonicalID].target = previous.target
+        end
         if replacement[canonicalID].duration > 2 then
             self.lastEffectiveDuration[canonicalID] = replacement[canonicalID].duration
         end
@@ -170,6 +191,12 @@ function State:ApplyCast(playerKey, identity, session, sequence, canonicalID, va
     if ARC.Bundles and ARC.Bundles.initialized then
         ARC.Bundles:OnReportedCast(playerKey, canonicalID)
     end
+    if ARC.Combos and ARC.Combos.initialized then
+        ARC.Combos:OnReportedCast(playerKey, canonicalID)
+    end
+    if ARC.Activity and ARC.Activity.initialized then
+        ARC.Activity:OnCast(playerKey, canonicalID, "ARC cast report")
+    end
     return true
 end
 
@@ -200,6 +227,9 @@ function State:ObserveCast(playerKey, identity, canonicalID, target)
     end
     if ARC.Bundles and ARC.Bundles.initialized then
         ARC.Bundles:OnReportedCast(playerKey, canonicalID)
+    end
+    if ARC.Combos and ARC.Combos.initialized then
+        ARC.Combos:OnReportedCast(playerKey, canonicalID)
     end
     return true
 end

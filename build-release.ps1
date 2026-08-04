@@ -75,7 +75,7 @@ function Test-BlockedRelativePath {
     foreach ($Segment in $Segments) {
         if (
             $Segment -like ".git*" -or
-            $Segment -in @(".github", ".claude", ".codex-plugins", ".agents", "Tests", "tmp", "Archive")
+            $Segment -in @(".github", ".claude", ".codex-plugins", ".agents", "Tests", "tmp")
         ) {
             return $true
         }
@@ -183,7 +183,12 @@ function New-ActuallyPackage {
             }
         }
 
-        $RuntimeAssetExtensions = @(".blp", ".tga", ".ogg", ".wav", ".mp3", ".ttf")
+        # Keep runtime textures plus the complete artwork archive and its
+        # recovery ZIP in distributable builds.
+        $RuntimeAssetExtensions = @(
+            ".blp", ".tga", ".png", ".jpg", ".jpeg", ".zip",
+            ".ogg", ".wav", ".mp3", ".ttf"
+        )
         Get-ChildItem -LiteralPath $RepositoryDirectory -Recurse -File |
             Where-Object {
                 $_.Extension.ToLowerInvariant() -in $RuntimeAssetExtensions -and

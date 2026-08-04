@@ -4,7 +4,7 @@ local Addon = Actually
 local CacheTips = {}
 Addon.CacheTips = CacheTips
 local SetBackdrop = Addon.Util.SetBackdrop
-local ROLE_PANEL_TOP = -376
+local ROLE_PANEL_TOP = -424
 
 local ROLE_DEFINITIONS = {
     {
@@ -203,7 +203,7 @@ function CacheTips:Create()
     local utility = CreateFrame("Frame", nil, root)
     utility:SetPoint("TOPLEFT", root, "TOPLEFT", 0, -70)
     utility:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, -70)
-    utility:SetHeight(122)
+    utility:SetHeight(170)
     SetBackdrop(utility, { 0.075, 0.045, 0.12, 0.96 }, { 0.58, 0.38, 0.88, 0.92 })
 
     local utilityTitle = utility:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
@@ -252,7 +252,8 @@ function CacheTips:Create()
 
     local raidCCPanel = CreateFrame("Frame", nil, utility)
     raidCCPanel:SetPoint("TOPLEFT", utility, "TOPLEFT", 282, -39)
-    raidCCPanel:SetPoint("BOTTOMRIGHT", utility, "BOTTOMRIGHT", -10, 10)
+    raidCCPanel:SetPoint("TOPRIGHT", utility, "TOPRIGHT", -10, -39)
+    raidCCPanel:SetHeight(56)
     SetBackdrop(
         raidCCPanel,
         { 0.035, 0.055, 0.070, 0.94 },
@@ -263,11 +264,10 @@ function CacheTips:Create()
         "UICheckButtonTemplate")
     raidCCCheckbox:SetWidth(26)
     raidCCCheckbox:SetHeight(26)
-    raidCCCheckbox:SetPoint("TOPLEFT", raidCCPanel, "TOPLEFT", 7, -7)
+    raidCCCheckbox:SetPoint("TOPLEFT", raidCCPanel, "TOPLEFT", 7, -5)
     local raidCCLabel = raidCCCheckbox:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
     raidCCLabel:SetPoint("LEFT", raidCCCheckbox, "RIGHT", 4, 1)
-    raidCCLabel:SetText(
-        "Mass Dispel Helper - Note: |cffff2020changes friendly nameplates while in raid|r")
+    raidCCLabel:SetText("Mass Dispel Helper")
     self.raidCCCheckbox = raidCCCheckbox
     self.raidCCLabel = raidCCLabel
 
@@ -302,9 +302,9 @@ function CacheTips:Create()
     end)
 
     local raidCCSettings = CreateFrame("Button", nil, raidCCPanel, "UIPanelButtonTemplate")
-    raidCCSettings:SetWidth(90)
+    raidCCSettings:SetWidth(78)
     raidCCSettings:SetHeight(22)
-    raidCCSettings:SetPoint("TOPLEFT", raidCCLabel, "BOTTOMLEFT", 0, -6)
+    raidCCSettings:SetPoint("BOTTOMRIGHT", raidCCPanel, "BOTTOMRIGHT", -6, 5)
     raidCCSettings:SetText("Settings")
     raidCCSettings:SetScript("OnClick", function()
         if Addon.RaidCC and Addon.RaidCC.ToggleSettings then
@@ -324,9 +324,90 @@ function CacheTips:Create()
     end)
     self.raidCCSettingsButton = raidCCSettings
 
+    local raidCCNote = raidCCPanel:CreateFontString(
+        nil, "OVERLAY", "GameFontHighlightSmall")
+    raidCCNote:SetPoint("BOTTOMLEFT", raidCCPanel, "BOTTOMLEFT", 37, 9)
+    raidCCNote:SetText("|cffff4040Changes friendly nameplates in raid|r")
+
+    local enemyPanel = CreateFrame("Frame", nil, utility)
+    enemyPanel:SetPoint("TOPLEFT", utility, "TOPLEFT", 282, -101)
+    enemyPanel:SetPoint("TOPRIGHT", utility, "TOPRIGHT", -10, -101)
+    enemyPanel:SetHeight(56)
+    SetBackdrop(
+        enemyPanel,
+        { 0.070, 0.035, 0.035, 0.95 },
+        { 0.90, 0.32, 0.25, 0.88 })
+    self.enemyMarkerPanel = enemyPanel
+
+    local enemyCheckbox = CreateFrame(
+        "CheckButton", "ActuallyEnemyMarkerCheckButton", enemyPanel,
+        "UICheckButtonTemplate")
+    enemyCheckbox:SetWidth(26)
+    enemyCheckbox:SetHeight(26)
+    enemyCheckbox:SetPoint("TOPLEFT", enemyPanel, "TOPLEFT", 7, -5)
+    local enemyLabel = enemyCheckbox:CreateFontString(
+        nil, "OVERLAY", "GameFontHighlightSmall")
+    enemyLabel:SetPoint("LEFT", enemyCheckbox, "RIGHT", 4, 1)
+    enemyLabel:SetText("Enemy Player Arrows")
+    self.enemyMarkerCheckbox = enemyCheckbox
+    self.enemyMarkerLabel = enemyLabel
+
+    enemyCheckbox:SetScript("OnClick", function(owner)
+        if Addon.EnemyMarkers then
+            Addon.EnemyMarkers:SetEnabled(
+                owner:GetChecked() == 1 or owner:GetChecked() == true)
+        end
+    end)
+    enemyCheckbox:SetScript("OnEnter", function(owner)
+        GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Enemy Player Arrows", 1, 1, 1)
+        GameTooltip:AddLine(
+            "Adds Healer or Frontline arrows to named enemy players while leaving TurboPlates health, casts, buffs, and debuffs active.",
+            nil, nil, nil, true)
+        if Addon.EnemyMarkers and Addon.EnemyMarkers.GetRuntimeStatus then
+            local state, status = Addon.EnemyMarkers:GetRuntimeStatus()
+            local r, g, b = 0.72, 0.72, 0.72
+            if state == "active" then
+                r, g, b = 0.25, 1, 0.35
+            elseif state == "blocked" then
+                r, g, b = 1, 0.25, 0.20
+            end
+            GameTooltip:AddLine(" ")
+            GameTooltip:AddLine(status, r, g, b, true)
+        end
+        GameTooltip:Show()
+    end)
+    enemyCheckbox:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+    local enemySettings = CreateFrame("Button", nil, enemyPanel, "UIPanelButtonTemplate")
+    enemySettings:SetWidth(78)
+    enemySettings:SetHeight(22)
+    enemySettings:SetPoint("BOTTOMRIGHT", enemyPanel, "BOTTOMRIGHT", -6, 5)
+    enemySettings:SetText("Settings")
+    enemySettings:SetScript("OnClick", function()
+        if Addon.EnemyMarkers and Addon.EnemyMarkers.ToggleSettings then
+            Addon.EnemyMarkers:ToggleSettings()
+        end
+    end)
+    enemySettings:SetScript("OnEnter", function(owner)
+        GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+        GameTooltip:SetText("Enemy Player Arrow Settings", 1, 1, 1)
+        GameTooltip:AddLine(
+            "Edit personal Healer and Frontline name lists, colours, size, glow, pulse, and height above TurboPlates auras.",
+            nil, nil, nil, true)
+        GameTooltip:Show()
+    end)
+    enemySettings:SetScript("OnLeave", function() GameTooltip:Hide() end)
+    self.enemyMarkerSettingsButton = enemySettings
+
+    local enemyNote = enemyPanel:CreateFontString(
+        nil, "OVERLAY", "GameFontHighlightSmall")
+    enemyNote:SetPoint("BOTTOMLEFT", enemyPanel, "BOTTOMLEFT", 37, 9)
+    enemyNote:SetText("|cff76d7ffKeeps TP auras active|r")
+
     local arcAlerts = CreateFrame("Frame", nil, root)
-    arcAlerts:SetPoint("TOPLEFT", root, "TOPLEFT", 0, -202)
-    arcAlerts:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, -202)
+    arcAlerts:SetPoint("TOPLEFT", root, "TOPLEFT", 0, -250)
+    arcAlerts:SetPoint("TOPRIGHT", root, "TOPRIGHT", 0, -250)
     arcAlerts:SetHeight(125)
     SetBackdrop(arcAlerts, { 0.030, 0.055, 0.075, 0.97 }, { 0.20, 0.72, 0.96, 0.88 })
 
@@ -499,7 +580,7 @@ function CacheTips:Create()
     self.arcOfficerConfigLabel = arcOfficerLabel
 
     local roleHeading = root:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    roleHeading:SetPoint("TOPLEFT", root, "TOPLEFT", 2, -344)
+    roleHeading:SetPoint("TOPLEFT", root, "TOPLEFT", 2, -392)
     roleHeading:SetText("Role Tips")
     roleHeading:SetTextColor(0.82, 0.86, 0.94)
 
@@ -529,6 +610,7 @@ function CacheTips:Create()
     self:RefreshArrowToggle()
     self:RefreshFapToggle()
     self:RefreshRaidCCToggle()
+    self:RefreshEnemyMarkerToggle()
     self:RefreshARCAlertControls()
 end
 
@@ -656,6 +738,31 @@ function CacheTips:RefreshRaidCCToggle()
     end
 end
 
+function CacheTips:RefreshEnemyMarkerToggle()
+    if not self.enemyMarkerCheckbox then return end
+    local markers = Addon.EnemyMarkers
+    local available = markers and markers.IsEnabled
+    self.enemyMarkerCheckbox:SetChecked(
+        available and markers:IsEnabled() or false)
+    if self.enemyMarkerSettingsButton then
+        if available and markers.ToggleSettings then
+            self.enemyMarkerSettingsButton:Enable()
+        else
+            self.enemyMarkerSettingsButton:Disable()
+        end
+    end
+    if not self.enemyMarkerLabel then return end
+    local state = markers and markers.GetRuntimeStatus
+        and markers:GetRuntimeStatus() or "disabled"
+    if state == "active" then
+        self.enemyMarkerLabel:SetTextColor(0.30, 1.00, 0.42)
+    elseif state == "blocked" then
+        self.enemyMarkerLabel:SetTextColor(1.00, 0.28, 0.22)
+    else
+        self.enemyMarkerLabel:SetTextColor(1, 1, 1)
+    end
+end
+
 function CacheTips:RefreshArrowToggle()
     if not self.arrowCheckbox then return end
     local arrow = Addon.CallerArrow
@@ -687,6 +794,7 @@ function CacheTips:SetVisible(visible)
         self:RefreshArrowToggle()
         self:RefreshFapToggle()
         self:RefreshRaidCCToggle()
+        self:RefreshEnemyMarkerToggle()
         self:RefreshARCAlertControls()
         self:Refresh()
         self.root:Show()

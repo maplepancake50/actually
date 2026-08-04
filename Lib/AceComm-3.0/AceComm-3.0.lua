@@ -17,7 +17,7 @@ TODO: Time out old data rotting around from dead senders? Not a HUGE deal since 
 
 ]]
 
-local MAJOR, MINOR = "AceComm-3.0", 6
+local MAJOR, MINOR = "AceComm-3.0", 7
 
 local AceComm,oldminor = LibStub:NewLibrary(MAJOR, MINOR)
 
@@ -34,7 +34,7 @@ local error, assert = error, assert
 
 -- Global vars/functions that we don't upvalue since they might get hooked, or upgraded
 -- List them here for Mikk's FindGlobals script
--- GLOBALS: LibStub, DEFAULT_CHAT_FRAME, geterrorhandler
+-- GLOBALS: LibStub, DEFAULT_CHAT_FRAME, GetTime, geterrorhandler
 
 AceComm.embeds = AceComm.embeds or {}
 
@@ -48,6 +48,56 @@ AceComm.multipart_reassemblers = AceComm.multipart_reassemblers or {} -- e.g. "P
 
 -- the multipart message spool: indexed by a combination of sender+distribution+
 AceComm.multipart_spool = AceComm.multipart_spool or {} 
+AceComm.multipart_spool_meta = AceComm.multipart_spool_meta or {}
+
+-- Bound incomplete messages so a lost final chunk or a hostile sender cannot
+-- retain an unbounded string for the rest of the session. The diagnostic
+-- harness is the largest legitimate user and remains comfortably below 128KB.
+local MAX_MULTIPART_BYTES = 128 * 1024
+local MAX_MULTIPART_AGE = 180
+local nextMultipartCleanupAt = 0
+
+local function MultipartNow()
+	return GetTime and GetTime() or 0
+end
+
+local function ClearMultipart(key)
+	AceComm.multipart_spool[key] = nil
+	AceComm.multipart_spool_meta[key] = nil
+end
+
+local function CleanupMultipart(now)
+	if now < nextMultipartCleanupAt then return end
+	nextMultipartCleanupAt = now + 15
+	for key, meta in pairs(AceComm.multipart_spool_meta) do
+		if now - (meta.updatedAt or now) > MAX_MULTIPART_AGE
+			or now - (meta.startedAt or now) > MAX_MULTIPART_AGE then
+			ClearMultipart(key)
+		end
+	end
+end
+
+local function TrackMultipart(key, bytes, replace)
+	local now = MultipartNow()
+	CleanupMultipart(now)
+	local meta = not replace and AceComm.multipart_spool_meta[key] or nil
+	if not replace and not meta then
+		ClearMultipart(key)
+		return false
+	end
+	local total = (meta and meta.bytes or 0) + bytes
+	if total > MAX_MULTIPART_BYTES
+		or (meta and now - (meta.startedAt or now) > MAX_MULTIPART_AGE) then
+		ClearMultipart(key)
+		return false
+	end
+	AceComm.multipart_spool_meta[key] = {
+		bytes = total,
+		startedAt = meta and meta.startedAt or now,
+		updatedAt = now,
+	}
+	return true
+end
 
 --- Register for Addon Traffic on a specified prefix
 -- @param prefix A printable character (\032-\255) classification of the message (typically AddonName or AddonNameEvent)
@@ -94,6 +144,12 @@ function AceComm:SendCommMessage(prefix, text, distribution, target, prio, callb
 
 	local textlen = #text
 	local maxtextlen = 254 - #prefix	-- 254 is the max length of prefix + text that can be sent in one message
+	if textlen > maxtextlen then
+		-- The receiver has one multipart spool per prefix/distribution/sender.
+		-- A single priority lane prevents separate CTL queues from interleaving
+		-- two multipart messages that share that spool.
+		prio = "NORMAL"
+	end
 	local queueName = prefix..distribution..(target or "")
 
 	local ctlCallback = nil
@@ -164,7 +220,9 @@ do
 		end
 		--]]
 		
-		spool[key] = message  -- plain string for now
+		if TrackMultipart(key, #message, true) then
+			spool[key] = message  -- plain string for now
+		end
 	end
 
 	function AceComm:OnReceiveMultipartNext(prefix, message, distribution, sender)
@@ -176,6 +234,7 @@ do
 			--lostdatawarning(prefix,sender,"Next")
 			return
 		end
+		if not TrackMultipart(key, #message, false) then return end
 
 		if type(olddata)~="table" then
 			-- ... but what we have is not a table. So make it one. (Pull a composted one if available)
@@ -197,8 +256,10 @@ do
 			--lostdatawarning(prefix,sender,"End")
 			return
 		end
+		if not TrackMultipart(key, #message, false) then return end
 
 		spool[key] = nil
+		AceComm.multipart_spool_meta[key] = nil
 		
 		if type(olddata) == "table" then
 			-- if we've received a "next", the spooled data will be a table for rapid & garbage-free tconcat

@@ -7,7 +7,7 @@ local CallerArrow = {}
 Addon.CallerArrow = CallerArrow
 
 local TWO_PI = math.pi * 2
-local UPDATE_INTERVAL = 0.05
+local UPDATE_INTERVAL = 0.10
 local MAP_REFRESH_INTERVAL = 1
 local DEFAULT_MAP_ASPECT = 1.5
 local CALLER_PROTOCOL = 1
@@ -266,6 +266,8 @@ function CallerArrow:SetTarget(identity, revision, force)
         return false
     end
     self.targetName = Addon.Util.ShortName(identity)
+    self.unit = nil
+    self.unitResolved = false
     Addon.db.assistLog.selectedCaller = self.targetName
     if revision then Addon.db.assistLog.selectedCallerRevision = revision end
     self.elapsed = UPDATE_INTERVAL
@@ -282,7 +284,7 @@ function CallerArrow:IsEnabled()
 end
 
 function CallerArrow:IsTargetInRaid()
-    local unit = self.targetName and FindRaidUnit(self.targetName)
+    local unit = self.targetName and self:ResolveTargetUnit(true)
     return unit ~= nil and unit ~= "player"
 end
 
@@ -371,12 +373,24 @@ function CallerArrow:Hide()
     if self.frame then self.frame:Hide() end
 end
 
+function CallerArrow:ResolveTargetUnit(force)
+    if not force and self.unitResolved then return self.unit end
+    self.unitResolved = true
+    self.unit = self.targetName and FindRaidUnit(self.targetName) or nil
+    return self.unit
+end
+
+function CallerArrow:InvalidateTargetUnit()
+    self.unit = nil
+    self.unitResolved = false
+end
+
 function CallerArrow:RefreshVisibility()
     if not self:IsEnabled() or not self.targetName then
         self:Hide()
         return false
     end
-    local unit = FindRaidUnit(self.targetName)
+    local unit = self:ResolveTargetUnit()
     if not unit or unit == "player" then
         self:Hide()
         return false
@@ -467,6 +481,7 @@ function CallerArrow:Initialize()
             end
             return
         end
+        CallerArrow:InvalidateTargetUnit()
         CallerArrow.elapsed = UPDATE_INTERVAL
         CallerArrow.mapRefreshElapsed = MAP_REFRESH_INTERVAL
         CallerArrow:RefreshVisibility()

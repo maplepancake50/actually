@@ -110,9 +110,24 @@ function Commander:GetPlans()
     return plans
 end
 
+function Commander:GetCombos()
+    local combos = ARC.db.profile.timedCombos
+    if type(combos) ~= "table" then
+        combos = {}
+        ARC.db.profile.timedCombos = combos
+    end
+    return combos
+end
+
 function Commander:FindPlan(planID)
     for index, plan in ipairs(self:GetPlans()) do
         if plan.id == planID then return plan, index end
+    end
+end
+
+function Commander:FindCombo(comboID)
+    for index, combo in ipairs(self:GetCombos()) do
+        if tostring(combo.id) == tostring(comboID) then return combo, index end
     end
 end
 
@@ -195,6 +210,52 @@ function Commander:StageAvailability(stage)
     return ready, total, shortest
 end
 
+function Commander:ComboAvailability(combo)
+    local actions = {}
+    for _, action in ipairs(combo and combo.actions or {}) do
+        local spellID = ARC.Registry:Canonicalize(action.spellID)
+        if spellID then
+            table.insert(actions, {
+                spellID = spellID,
+                offset = tonumber(action.offset) or 0,
+            })
+        end
+    end
+    local total = table.getn(actions)
+    if total == 0 then return 0, 0, nil, "empty combo" end
+    local planned, unavailableIndex, reason = ARC.Combos:PlanActions(actions)
+    if planned then return total, total, nil, nil, planned, actions end
+
+    local ready, shortest = 0, nil
+    for _, action in ipairs(actions) do
+        local candidates = ARC.Automation:GetCandidates(action.spellID, nil, {}, {})
+        if table.getn(candidates) > 0 then
+            ready = ready + 1
+        else
+            for playerKey, player in pairs(ARC.State.players or {}) do
+                local spell = player.spells and player.spells[action.spellID]
+                local selfKey = ARC.Roster:GetPlayer()
+                local peerReady = playerKey == selfKey
+                    or (player.source == "REPORT" and ARC.State.peers[playerKey])
+                if spell and peerReady and player.connected ~= false
+                    and not player.dead and not player.stale then
+                    local remaining = math.max(0, (spell.readyAt or 0) - ARC:Now())
+                    if remaining > 0 and (not shortest or remaining < shortest) then
+                        shortest = remaining
+                    end
+                end
+            end
+        end
+    end
+    return ready, total, shortest,
+        unavailableIndex and "no ready player" or reason, nil, actions
+end
+
+function Commander:IsComboActive(comboID)
+    local active = ARC.Combos and ARC.Combos.active
+    return active and tostring(active.definitionID) == tostring(comboID) or false
+end
+
 function Commander:IsPlanActive(planID)
     return self.activePlanID == planID and ARC.Bundles and ARC.Bundles.active
 end
@@ -236,7 +297,8 @@ function Commander:StartPlan(planID)
     if behavior ~= "enabled" then
         return self:ShowPlanBehaviorMessage(plan, behavior)
     end
-    if self.pendingPlanID or self.activePlanID or ARC.Bundles.active or ARC.Requests.outgoing then
+    if self.pendingPlanID or self.activePlanID or ARC.Bundles.active or ARC.Requests.outgoing
+        or (ARC.Combos and (ARC.Combos.active or ARC.Combos.pendingComboID)) then
         ARC:Print("finish or cancel the active cooldown command first")
         return false
     end
@@ -304,6 +366,9 @@ function Commander:OnBundleCancelled(bundle)
 end
 
 function Commander:ShowTooltip(button)
+    if button and button.entryKind == "combo" then
+        return self:ShowComboTooltip(button)
+    end
     local plan = button and button.plan
     if not plan or not GameTooltip then return end
     GameTooltip:SetOwner(button, "ANCHOR_RIGHT")
@@ -350,6 +415,50 @@ function Commander:ShowTooltip(button)
     GameTooltip:Show()
 end
 
+function Commander:ShowComboTooltip(button)
+    local combo = button and button.combo
+    if not combo or not GameTooltip then return end
+    GameTooltip:SetOwner(button, "ANCHOR_RIGHT")
+    GameTooltip:ClearLines()
+    GameTooltip:SetText(tostring(combo.name), 0.32, 0.86, 1.00)
+    GameTooltip:AddLine("Timed combo - " .. string.format("%.1f sec countdown",
+        tonumber(combo.leadTime) or 5), 0.55, 0.76, 0.88)
+    local _, _, _, planReason, planned, actions = self:ComboAvailability(combo)
+    for index, action in ipairs(actions or {}) do
+        local spellID = action.spellID
+        if spellID then
+            local candidate = planned and planned[index]
+            if not candidate then
+                local rows = ARC.Automation:GetCandidates(spellID, nil, {}, {})
+                candidate = rows[1] and rows[1].key
+            end
+            local target = candidate and (ARC.State.players[candidate]
+                or (ARC.Roster.byKey and ARC.Roster.byKey[candidate]))
+            GameTooltip:AddDoubleLine("    " .. spellIconText(spellID)
+                .. ARC.SpellInfo:ResolveSpellName(spellID)
+                .. "  " .. string.format("%+.1fs", tonumber(action.offset) or 0),
+                target and ("-> " .. shortName(target)) or "not ready",
+                0.88, 0.92, 1.00,
+                target and 0.35 or 1.00, target and 1.00 or 0.40,
+                target and 0.35 or 0.30)
+        end
+    end
+    if planReason == "same-player timing conflict" then
+        GameTooltip:AddLine(" ")
+        GameTooltip:AddLine("No safe assignment: one player would receive actions too close together.",
+            1.00, 0.35, 0.25)
+    end
+    GameTooltip:AddLine(" ")
+    GameTooltip:AddLine("Unavailable players may be replaced during preflight.",
+        0.35, 1.00, 0.35)
+    GameTooltip:AddLine("Assignments are frozen once the countdown begins.",
+        1.00, 0.72, 0.20)
+    GameTooltip:AddLine(self:IsComboActive(combo.id)
+        and "Right-click: cancel timed combo" or "Left-click: start timed combo",
+        0.75, 0.85, 1.00)
+    GameTooltip:Show()
+end
+
 function Commander:CreateButton(index)
     local button = CreateFrame("Button", nil, self.frame)
     button:SetHeight(ROW_HEIGHT - 3)
@@ -389,6 +498,15 @@ function Commander:CreateButton(index)
     button.stage:SetJustifyH("RIGHT")
 
     button:SetScript("OnClick", function(self, mouseButton)
+        if self.entryKind == "combo" then
+            if not self.combo then return end
+            if mouseButton == "RightButton" and Commander:IsComboActive(self.combo.id) then
+                ARC.Combos:CancelActive("cancelled from commander bar")
+            elseif mouseButton == "LeftButton" and self.arcActionable then
+                ARC.Combos:Start(self.combo)
+            end
+            return
+        end
         if not self.plan then return end
         if mouseButton == "RightButton" and Commander:IsPlanActive(self.plan.id) then
             ARC.Bundles:CancelActive("cancelled from commander bar")
@@ -409,6 +527,8 @@ function Commander:RefreshButton(button, plan)
     local stage, stageIndex = self:GetCurrentStage(plan)
     local stageCount = table.getn(plan.stages or {})
     local firstSpell = stage and stage.spells[1]
+    button.entryKind = "plan"
+    button.combo = nil
     button.plan = plan
     button.name:SetText(tostring(plan.name or "Unnamed command"))
     button.icon:SetTexture(firstSpell and ARC.SpellInfo:ResolveSpellIcon(firstSpell)
@@ -435,7 +555,8 @@ function Commander:RefreshButton(button, plan)
         button.glow:Hide()
         button.arcActionable = false
         button:SetBackdropBorderColor(0.50, 0.30, 0.70, 0.95)
-    elseif self.activePlanID or ARC.Bundles.active or ARC.Requests.outgoing then
+    elseif self.activePlanID or ARC.Bundles.active or ARC.Requests.outgoing
+        or (ARC.Combos and (ARC.Combos.active or ARC.Combos.pendingComboID)) then
         button.status:SetText("BUSY - ANOTHER COMMAND")
         button.status:SetTextColor(0.58, 0.62, 0.68)
         button.stage:SetTextColor(0.58, 0.62, 0.68)
@@ -496,26 +617,154 @@ function Commander:RefreshButton(button, plan)
     end
 end
 
+function Commander:RefreshComboButton(button, combo)
+    local firstAction = combo.actions and combo.actions[1]
+    local firstSpell = firstAction and ARC.Registry:Canonicalize(firstAction.spellID)
+    button.entryKind = "combo"
+    button.plan = nil
+    button.combo = combo
+    button.name:SetText(tostring(combo.name or "Unnamed timed combo"))
+    button.icon:SetTexture(firstSpell and ARC.SpellInfo:ResolveSpellIcon(firstSpell)
+        or "Interface\\Icons\\INV_Misc_PocketWatch_01")
+    button.stage:SetText("TIMED")
+
+    local active = ARC.Combos and ARC.Combos.active
+    local isActive = self:IsComboActive(combo.id)
+    local ready, total, shortest, planReason = self:ComboAvailability(combo)
+    if isActive then
+        if active.state == "PREFLIGHT" then
+            local acknowledged = 0
+            for _, action in pairs(active.actions or {}) do
+                if action.status == "READY" then acknowledged = acknowledged + 1 end
+            end
+            button.status:SetText("PREFLIGHT " .. tostring(acknowledged)
+                .. "/" .. tostring(table.getn(active.order or {})))
+        else
+            local remaining = math.max(0, (active.anchorAt or ARC:Now()) - ARC:Now())
+            button.status:SetText(remaining > 0
+                and ("COUNTDOWN " .. tostring(math.ceil(remaining)))
+                or "EXECUTING - ASSIGNMENTS FROZEN")
+        end
+        button.status:SetTextColor(0.76, 0.55, 1.00)
+        button.stage:SetTextColor(0.76, 0.55, 1.00)
+        button.glow:SetVertexColor(0.72, 0.35, 1.00, 0.85)
+        button.glow:Show()
+        button.arcActionable = false
+        button:SetBackdropBorderColor(0.72, 0.35, 1.00, 1)
+    elseif ARC.Combos and ARC.Combos.pendingComboID then
+        button.status:SetText(tostring(ARC.Combos.pendingComboID) == tostring(combo.id)
+            and "STARTING - CLAIMING CONTROL" or "BUSY - COMBO STARTING")
+        button.status:SetTextColor(0.76, 0.55, 1.00)
+        button.stage:SetTextColor(0.76, 0.55, 1.00)
+        button.glow:Hide()
+        button.arcActionable = false
+        button:SetBackdropBorderColor(0.50, 0.30, 0.70, 0.95)
+    elseif self.pendingPlanID or self.activePlanID or ARC.Bundles.active
+        or ARC.Requests.outgoing or (active and not isActive) then
+        button.status:SetText("BUSY - ANOTHER COMMAND")
+        button.status:SetTextColor(0.58, 0.62, 0.68)
+        button.stage:SetTextColor(0.58, 0.62, 0.68)
+        button.glow:Hide()
+        button.arcActionable = false
+        button:SetBackdropBorderColor(0.22, 0.26, 0.30, 0.92)
+    elseif not ARC:HasCommandAuthority() then
+        button.status:SetText("OFFICER ACCESS REQUIRED")
+        button.status:SetTextColor(0.58, 0.62, 0.68)
+        button.stage:SetTextColor(0.58, 0.62, 0.68)
+        button.glow:Hide()
+        button.arcActionable = false
+        button:SetBackdropBorderColor(0.22, 0.26, 0.30, 0.92)
+    elseif not ARC.Roster:IsGrouped() then
+        button.status:SetText("NOT GROUPED")
+        button.status:SetTextColor(0.58, 0.62, 0.68)
+        button.stage:SetTextColor(0.58, 0.62, 0.68)
+        button.glow:Hide()
+        button.arcActionable = false
+        button:SetBackdropBorderColor(0.22, 0.26, 0.30, 0.92)
+    elseif planReason == "same-player timing conflict" then
+        button.status:SetText("PLAYER TIMING CONFLICT")
+        button.status:SetTextColor(1.00, 0.38, 0.25)
+        button.stage:SetTextColor(1.00, 0.38, 0.25)
+        button.glow:Hide()
+        button.arcActionable = false
+        button:SetBackdropBorderColor(0.88, 0.20, 0.16, 1)
+    elseif total > 0 and ready == total then
+        button.status:SetText("READY " .. tostring(ready) .. "/" .. tostring(total))
+        button.status:SetTextColor(0.35, 1.00, 0.35)
+        button.stage:SetTextColor(0.35, 1.00, 0.35)
+        button.glow:SetVertexColor(0.25, 1.00, 0.35, 0.75)
+        button.glow:Show()
+        button.arcActionable = true
+        button:SetBackdropBorderColor(0.20, 0.76, 0.30, 1)
+    elseif ready > 0 then
+        button.status:SetText("NOT READY " .. tostring(ready) .. "/" .. tostring(total))
+        button.status:SetTextColor(1.00, 0.72, 0.20)
+        button.stage:SetTextColor(1.00, 0.72, 0.20)
+        button.glow:Hide()
+        button.arcActionable = false
+        button:SetBackdropBorderColor(0.82, 0.52, 0.14, 1)
+    else
+        button.status:SetText(shortest and ("WAIT " .. tostring(math.ceil(shortest)))
+            or (total > 0 and "NO READY OWNER" or "EMPTY COMBO"))
+        button.status:SetTextColor(0.58, 0.62, 0.68)
+        button.stage:SetTextColor(0.58, 0.62, 0.68)
+        button.glow:Hide()
+        button.arcActionable = false
+        button:SetBackdropBorderColor(0.22, 0.26, 0.30, 0.92)
+    end
+end
+
 function Commander:Refresh()
     if not self.frame then return end
+    if ARC.db.profile.commanderUI.shown == false and not self.frame:IsShown() then
+        return
+    end
     if not ARC:HasCommandAuthority() then
         self.frame:Hide()
         return
     end
-    local plans = {}
+    local entries = {}
     for _, plan in ipairs(self:GetPlans()) do
         if type(plan.stages) == "table" and table.getn(plan.stages) > 0 then
-            table.insert(plans, plan)
+            table.insert(entries, { kind = "plan", value = plan })
         end
     end
-    local count = math.min(table.getn(plans), ARC.Constants.MAX_COMMAND_PLANS)
+    for _, combo in ipairs(self:GetCombos()) do
+        if type(combo.actions) == "table" and table.getn(combo.actions) > 0 then
+            table.insert(entries, { kind = "combo", value = combo })
+        end
+    end
+    local pageSize = ARC.Constants.COMMANDER_PAGE_SIZE or ARC.Constants.MAX_COMMAND_PLANS
+    local pageCount = math.max(1, math.ceil(table.getn(entries) / pageSize))
+    self.page = math.max(1, math.min(self.page or 1, pageCount))
+    local startIndex = (self.page - 1) * pageSize + 1
+    local count = math.min(pageSize, math.max(0, table.getn(entries) - startIndex + 1))
     for index = 1, count do
         local button = self.buttons[index] or self:CreateButton(index)
-        self:RefreshButton(button, plans[index])
+        local entry = entries[startIndex + index - 1]
+        if entry.kind == "combo" then
+            self:RefreshComboButton(button, entry.value)
+        else
+            self:RefreshButton(button, entry.value)
+        end
         button:Show()
     end
     for index = count + 1, table.getn(self.buttons) do self.buttons[index]:Hide() end
     if count == 0 then self.frame.empty:Show() else self.frame.empty:Hide() end
+    if pageCount > 1 then
+        self.frame.previousPage:Show()
+        self.frame.nextPage:Show()
+        self.frame.pageText:SetText(tostring(self.page) .. "/" .. tostring(pageCount))
+        self.frame.pageText:Show()
+        if self.page > 1 then self.frame.previousPage:Enable()
+        else self.frame.previousPage:Disable() end
+        if self.page < pageCount then self.frame.nextPage:Enable()
+        else self.frame.nextPage:Disable() end
+    else
+        self.frame.previousPage:Hide()
+        self.frame.nextPage:Hide()
+        self.frame.pageText:Hide()
+    end
     self.frame:SetHeight(39 + math.max(1, count) * ROW_HEIGHT)
 end
 
@@ -610,9 +859,34 @@ function Commander:CreateFrame()
         if GameTooltip then GameTooltip:Hide() end
     end)
 
+    frame.nextPage = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    frame.nextPage:SetWidth(20)
+    frame.nextPage:SetHeight(18)
+    frame.nextPage:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -30, -5)
+    frame.nextPage:SetText(">")
+    frame.nextPage:SetScript("OnClick", function()
+        self.page = (self.page or 1) + 1
+        self:Refresh()
+    end)
+
+    frame.previousPage = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+    frame.previousPage:SetWidth(20)
+    frame.previousPage:SetHeight(18)
+    frame.previousPage:SetPoint("RIGHT", frame.nextPage, "LEFT", -3, 0)
+    frame.previousPage:SetText("<")
+    frame.previousPage:SetScript("OnClick", function()
+        self.page = math.max(1, (self.page or 1) - 1)
+        self:Refresh()
+    end)
+
+    frame.pageText = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+    frame.pageText:SetWidth(34)
+    frame.pageText:SetPoint("RIGHT", frame.previousPage, "LEFT", -3, 0)
+    frame.pageText:SetJustifyH("RIGHT")
+
     frame.dragBar = CreateFrame("Frame", nil, frame)
     frame.dragBar:SetPoint("TOPLEFT", frame, "TOPLEFT", 3, -3)
-    frame.dragBar:SetPoint("TOPRIGHT", frame.lock, "TOPLEFT", -4, 2)
+    frame.dragBar:SetPoint("TOPRIGHT", frame.pageText, "LEFT", -4, 2)
     frame.dragBar:SetHeight(22)
     frame.dragBar:EnableMouse(true)
     frame.dragBar:RegisterForDrag("LeftButton")
@@ -637,7 +911,7 @@ function Commander:CreateFrame()
 
     frame.empty = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     frame.empty:SetPoint("TOPLEFT", frame, "TOPLEFT", 10, -34)
-    frame.empty:SetText("No command plans. Use /arc commander config")
+    frame.empty:SetText("No command plans or timed combos. Use /arc commander config or /arc combos")
 
     frame.resizeGrip = CreateFrame("Button", nil, frame)
     frame.resizeGrip:SetWidth(18)
@@ -666,9 +940,11 @@ function Commander:Initialize()
     ARC.db.profile.commanderProgress = ARC.db.profile.commanderProgress or {}
     self.progress = ARC.db.profile.commanderProgress
     self.buttons = {}
+    self.page = 1
     self.elapsed = 0
     self:GetBundles()
     self:GetPlans()
+    self:GetCombos()
     self:CreateFrame()
     self:Refresh()
     self.initialized = true
@@ -687,10 +963,14 @@ function Commander:OnUpdate(elapsed)
         self.pendingPlanID = nil
         self.pendingStartedAt = nil
     end
+    if ARC.db.profile.commanderUI.shown == false then
+        if self.frame then self.frame:Hide() end
+        return
+    end
     if not ARC:HasCommandAuthority() then
         if self.frame then self.frame:Hide() end
         return
-    elseif ARC.db.profile.commanderUI.shown ~= false and not self.frame:IsShown() then
+    elseif not self.frame:IsShown() then
         self.frame:Show()
     end
     self:Refresh()

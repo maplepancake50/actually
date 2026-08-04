@@ -7,7 +7,8 @@ local RaidCC = Addon.RaidCC
 -- safety net for recycled unit tokens, late TurboPlates frames, and runtime
 -- compatibility changes.
 local HEARTBEAT_INTERVAL = 2.00
-local ARROW_TEXTURE = "Interface\\AddOns\\Actually\\Textures\\RaidCCArrow.tga"
+local AURA_REFRESH_DELAY = 0.15
+local ARROW_TEXTURE = "Interface\\AddOns\\Actually\\Textures\\RaidCCArrow.blp"
 local WARNING_INTERVAL = 30
 local MIN_ARROW_SIZE = 18
 local MAX_ARROW_SIZE = 72
@@ -159,6 +160,10 @@ RaidCC.affectedFriendlyCounts = type(RaidCC.affectedFriendlyCounts) == "table"
 RaidCC.friendlyAuraCounts = RaidCC.friendlyAuraCounts or {}
 RaidCC.friendlyAuraKindsByGUID = type(RaidCC.friendlyAuraKindsByGUID) == "table"
     and RaidCC.friendlyAuraKindsByGUID or {}
+RaidCC.friendlyAuraScratchByGUID = type(RaidCC.friendlyAuraScratchByGUID) == "table"
+    and RaidCC.friendlyAuraScratchByGUID or {}
+RaidCC.pendingAuraUnits = type(RaidCC.pendingAuraUnits) == "table"
+    and RaidCC.pendingAuraUnits or {}
 RaidCC.settingsRefreshing = false
 
 local function ClearTable(value)
@@ -415,6 +420,7 @@ function RaidCC:BuildEffectRegistry()
         Register(definition)
         self.trackedSpellNames[definition.auraName] = definition.key
     end
+    self.trackedKindCount = table.getn(self.effectOrder)
 
     if not self.effectsByKey[self.db.selectedEffectKey] then
         self.db.selectedEffectKey = self.effectOrder[1] and self.effectOrder[1].key
@@ -656,21 +662,24 @@ function RaidCC:PlayConfiguredSound(force, effectKey)
     return true
 end
 
-function RaidCC:GetUnitTrackedAuraKinds(unit)
-    local kinds = {}
+function RaidCC:GetUnitTrackedAuraKinds(unit, kinds)
+    kinds = kinds or {}
+    ClearTable(kinds)
     if not unit or not UnitExists(unit) then return kinds end
-
-    local function RecordAura(name, spellID)
-        local kind = (spellID and self.trackedSpellIDs[spellID])
-            or self.trackedSpellNames[name]
-        if kind then kinds[kind] = true end
-    end
+    local foundCount = 0
+    local trackedCount = self.trackedKindCount or 0
 
     if UnitDebuff then
         for index = 1, 40 do
             local name, _, _, _, _, _, _, _, _, _, spellID = UnitDebuff(unit, index)
             if not name then break end
-            RecordAura(name, spellID)
+            local kind = (spellID and self.trackedSpellIDs[spellID])
+                or self.trackedSpellNames[name]
+            if kind and not kinds[kind] then
+                kinds[kind] = true
+                foundCount = foundCount + 1
+                if foundCount >= trackedCount then return kinds end
+            end
         end
     end
 
@@ -678,7 +687,13 @@ function RaidCC:GetUnitTrackedAuraKinds(unit)
         for index = 1, 40 do
             local name, _, _, _, _, _, _, _, _, _, spellID = UnitBuff(unit, index)
             if not name then break end
-            RecordAura(name, spellID)
+            local kind = (spellID and self.trackedSpellIDs[spellID])
+                or self.trackedSpellNames[name]
+            if kind and not kinds[kind] then
+                kinds[kind] = true
+                foundCount = foundCount + 1
+                if foundCount >= trackedCount then return kinds end
+            end
         end
     end
     return kinds
@@ -703,6 +718,7 @@ end
 
 function RaidCC:RebuildFriendlyAuraCache(allowSound)
     ClearTable(self.friendlyAuraKindsByGUID)
+    ClearTable(self.friendlyAuraScratchByGUID)
     ClearTable(self.friendlyAuraCounts)
 
     if self.runtimeActive then
@@ -741,11 +757,14 @@ function RaidCC:UpdateFriendlyUnitAuraCache(unit)
     end
 
     local previous = self.friendlyAuraKindsByGUID[guid] or {}
-    local current = self:GetUnitTrackedAuraKinds(unit)
+    local current = self:GetUnitTrackedAuraKinds(
+        unit, self.friendlyAuraScratchByGUID[guid])
     if AuraKindSetsEqual(previous, current) then
-        -- Record even an empty set so subsequent irrelevant UNIT_AURA events
-        -- can return without any nameplate or threshold work.
-        self.friendlyAuraKindsByGUID[guid] = current
+        if not self.friendlyAuraKindsByGUID[guid] then
+            self.friendlyAuraKindsByGUID[guid] = previous
+        end
+        ClearTable(current)
+        self.friendlyAuraScratchByGUID[guid] = current
         return false, guid
     end
 
@@ -773,6 +792,8 @@ function RaidCC:UpdateFriendlyUnitAuraCache(unit)
     self:AdjustFriendlyAuraCounts(previous, -1)
     self:AdjustFriendlyAuraCounts(current, 1)
     self.friendlyAuraKindsByGUID[guid] = current
+    ClearTable(previous)
+    self.friendlyAuraScratchByGUID[guid] = previous
     return true, guid, arrowThresholdCrossed
 end
 
@@ -925,8 +946,12 @@ function RaidCC:HandleCommand(input)
     elseif command == "settings" or command == "options" then
         self:ToggleSettings()
     else
-        self:Print(
-            "commands: /raidcc settings, /raidcc debug, /raidcc status, /raidcc scan")
+        if Addon.CanViewCommandHelp and Addon:CanViewCommandHelp() then
+            self:Print(
+                "commands: /raidcc settings, /raidcc debug, /raidcc status, /raidcc scan")
+        else
+            self:Print("command unavailable")
+        end
     end
 end
 
@@ -2007,7 +2032,8 @@ function RaidCC:ScheduleGuardedRetry(nameplate, state)
     local expectedGUID = state.guid
     C_Timer.After(0, function()
         state.retryScheduled = false
-        if state.unit ~= expectedUnit
+        if not RaidCC.runtimeActive
+            or state.unit ~= expectedUnit
             or state.guid ~= expectedGUID
             or not expectedUnit
             or not UnitExists(expectedUnit)
@@ -2302,12 +2328,16 @@ function RaidCC:OnPlateAdded(unit, suppliedNameplate)
         self:Debug("plate added but no frame was resolved " .. UnitDescription(unit))
         return
     end
+    local existing = nameplate._actuallyRaidCCState
+    local guid = UnitGUID(unit)
+    if self.visiblePlates[nameplate] and existing
+        and existing.unit == unit and existing.guid == guid then return end
     self:Debug("plate added source=" .. (suppliedNameplate and "manager" or "event")
         .. " " .. UnitDescription(unit))
     self.visiblePlates[nameplate] = true
     local state = self:GetState(nameplate)
     state.unit = unit
-    state.guid = UnitGUID(unit)
+    state.guid = guid
     state.retryCount = 0
     self:SafeEvaluatePlate(nameplate, unit)
 end
@@ -2318,6 +2348,9 @@ function RaidCC:OnPlateRemoved(unit, suppliedNameplate)
         self:Debug("plate removed but no tracked frame was resolved " .. UnitDescription(unit))
         return
     end
+    if not self.visiblePlates[nameplate]
+        and not (nameplate._actuallyRaidCCState
+            and nameplate._actuallyRaidCCState.unit) then return end
     self:Debug("plate removed source=" .. (suppliedNameplate and "manager" or "event")
         .. " " .. UnitDescription(unit))
     local state = nameplate._actuallyRaidCCState
@@ -2452,9 +2485,13 @@ function RaidCC:EnterActiveMode()
     self:Debug("entering active raid mode")
     if not self:ForceRequiredCVars() then
         self.runtimeActive = false
+        self:SetRuntimeEventState(false)
+        ClearTable(self.visiblePlates)
+        ClearTable(self.unitToPlate)
         self:RestoreCVars(true)
         return
     end
+    self:SetRuntimeEventState(true)
     self:RebuildRaidGUIDCache()
     self:RebuildFriendlyAuraCache(true)
     self:ReevaluateVisiblePlates()
@@ -2463,12 +2500,24 @@ end
 function RaidCC:LeaveActiveMode()
     for nameplate in pairs(self.visiblePlates) do
         self:RemoveOverride(nameplate, false, "mode-disabled")
+        local state = nameplate._actuallyRaidCCState
+        if state then
+            state.unit = nil
+            state.guid = nil
+            state.retryCount = 0
+            state.retryScheduled = false
+        end
     end
+    ClearTable(self.visiblePlates)
+    ClearTable(self.unitToPlate)
     self.runtimeActive = false
+    self:SetRuntimeEventState(false)
     ClearTable(self.soundThresholdReached)
     ClearTable(self.affectedFriendlyCounts)
     ClearTable(self.friendlyAuraCounts)
     ClearTable(self.friendlyAuraKindsByGUID)
+    ClearTable(self.friendlyAuraScratchByGUID)
+    ClearTable(self.pendingAuraUnits)
     self:RefreshSettingsStatus()
     self:Debug("leaving active raid mode")
     self:RestoreCVars(true)
@@ -2491,8 +2540,33 @@ function RaidCC:RefreshMode()
         if requested and not compatible then
             self:WarnEnvironment(code, message)
         end
+        self:SetRuntimeEventState(false)
+        -- Lifecycle events are disabled while inactive. Discard retained
+        -- unit/frame associations and rediscover live plates on activation.
+        ClearTable(self.visiblePlates)
+        ClearTable(self.unitToPlate)
     end
     self:RefreshOptionsStatus()
+end
+
+function RaidCC:SetRuntimeEventState(active)
+    if self.eventFrame then
+        for _, event in ipairs({
+            "UNIT_AURA", "UNIT_NAME_UPDATE",
+            "NAME_PLATE_UNIT_ADDED", "NAME_PLATE_UNIT_REMOVED",
+        }) do
+            if active then
+                pcall(self.eventFrame.RegisterEvent, self.eventFrame, event)
+            else
+                pcall(self.eventFrame.UnregisterEvent, self.eventFrame, event)
+            end
+        end
+    end
+    if self.heartbeatFrame then
+        self.heartbeatFrame:SetScript("OnUpdate", active and function(_, elapsed)
+            RaidCC:OnHeartbeat(elapsed)
+        end or nil)
+    end
 end
 
 function RaidCC:OnHeartbeat(elapsed)
@@ -2540,6 +2614,19 @@ function RaidCC:OnRosterChanged()
         .. " runtime=" .. tostring(self.runtimeActive)
         .. " raidCount=" .. tostring(RaidCount()))
     self:RefreshMode()
+end
+
+function RaidCC:QueueUnitAura(unit)
+    if not self.runtimeActive or not unit or self.pendingAuraUnits[unit] then return end
+    if not C_Timer or not C_Timer.After then
+        self:OnUnitChanged(unit, true)
+        return
+    end
+    self.pendingAuraUnits[unit] = true
+    C_Timer.After(AURA_REFRESH_DELAY, function()
+        RaidCC.pendingAuraUnits[unit] = nil
+        if RaidCC.runtimeActive then RaidCC:OnUnitChanged(unit, true) end
+    end)
 end
 
 function RaidCC:OnUnitChanged(unit, auraOnly)
@@ -2631,15 +2718,15 @@ function Events.ZONE_CHANGED_NEW_AREA()
 end
 
 function Events.NAME_PLATE_UNIT_ADDED(unit)
-    RaidCC:OnPlateAdded(unit)
+    if RaidCC.runtimeActive then RaidCC:OnPlateAdded(unit) end
 end
 
 function Events.NAME_PLATE_UNIT_REMOVED(unit)
-    RaidCC:OnPlateRemoved(unit)
+    if RaidCC.runtimeActive then RaidCC:OnPlateRemoved(unit) end
 end
 
 function Events.UNIT_AURA(unit)
-    RaidCC:OnUnitChanged(unit, true)
+    RaidCC:QueueUnitAura(unit)
 end
 
 function Events.UNIT_NAME_UPDATE(unit)
@@ -2697,17 +2784,14 @@ end)
 -- The traditional NAME_PLATE events above remain as a harmless fallback.
 if EventRegistry and EventRegistry.RegisterCallback then
     EventRegistry:RegisterCallback("NamePlateManager.UnitAdded", function(_, unit, nameplate)
-        RaidCC:OnPlateAdded(unit, nameplate)
+        if RaidCC.runtimeActive then RaidCC:OnPlateAdded(unit, nameplate) end
     end)
     EventRegistry:RegisterCallback("NamePlateManager.UnitRemoved", function(_, unit, nameplate)
-        RaidCC:OnPlateRemoved(unit, nameplate)
+        if RaidCC.runtimeActive then RaidCC:OnPlateRemoved(unit, nameplate) end
     end)
 end
 
 RaidCC.heartbeatFrame = CreateFrame("Frame")
-RaidCC.heartbeatFrame:SetScript("OnUpdate", function(_, elapsed)
-    RaidCC:OnHeartbeat(elapsed)
-end)
 
 if SlashCmdList then
     SLASH_ACTUALLYRAIDCC1 = "/raidcc"

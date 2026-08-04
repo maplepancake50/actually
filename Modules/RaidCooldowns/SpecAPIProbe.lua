@@ -774,6 +774,9 @@ function SpecAPIProbe:StopEventCapture()
 end
 
 function SpecAPIProbe:Toggle()
+    if ARC.OfficerConfig and ARC.OfficerConfig.frame then
+        return ARC.OfficerConfig:Toggle("probe")
+    end
     if self.frame:IsShown() then
         self.frame:Hide()
         return false

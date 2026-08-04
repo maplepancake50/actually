@@ -2,7 +2,7 @@
 ## Title: actually
 ## Notes: Ascension Crow's cache utility + guild addon
 ## Author: Bolty
-## Version: 0.3.7
+## Version: 0.3.15
 ## SavedVariables: ActuallyDB
 ## OptionalDeps: TurboPlates
 
@@ -19,6 +19,7 @@ RaidTargets.lua
 CallerArrow.lua
 FapAlert.lua
 RaidCC.lua
+EnemyMarkers.lua
 CacheTips.lua
 AssistLogUI.lua
 FocusAssignments.lua
@@ -40,6 +41,7 @@ Modules\RaidCooldowns\Constants.lua
 Modules\RaidCooldowns\Defaults.lua
 Modules\RaidCooldowns\Registry.lua
 Modules\RaidCooldowns\SpellInfo.lua
+Modules\RaidCooldowns\Activity.lua
 Modules\RaidCooldowns\State.lua
 Modules\RaidCooldowns\Roster.lua
 Modules\RaidCooldowns\Spellbook.lua
@@ -49,10 +51,12 @@ Modules\RaidCooldowns\CombatLog.lua
 Modules\RaidCooldowns\Renderer.lua
 Modules\RaidCooldowns\Requests.lua
 Modules\RaidCooldowns\Bundles.lua
+Modules\RaidCooldowns\Combos.lua
 Modules\RaidCooldowns\Commander.lua
 Modules\RaidCooldowns\UserList.lua
 Modules\RaidCooldowns\BundleConfig.lua
 Modules\RaidCooldowns\CommanderConfig.lua
+Modules\RaidCooldowns\ComboConfig.lua
 Modules\RaidCooldowns\OfficerConfig.lua
 Modules\RaidCooldowns\SpellConfig.lua
 Modules\RaidCooldowns\SpecAPIProbe.lua
@@ -60,5 +64,6 @@ Modules\RaidCooldowns\TestUI.lua
 Modules\RaidCooldowns\SpoofTest.lua
 Modules\RaidCooldowns\TestMode.lua
 Modules\RaidCooldowns\Debug.lua
+Modules\RaidCooldowns\Diagnostics.lua
 Modules\RaidCooldowns\Init.lua
 SpecReporter.lua

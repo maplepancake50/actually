@@ -19,6 +19,7 @@ local MAX_TRANSFER_CHUNKS = 2000
 local MAX_LIVE_PAYLOAD = 240
 local MAX_QUEUED_MESSAGES = 5000
 local RESERVED_ALERT_MESSAGES = 250
+local MAX_THROTTLE_IN_FLIGHT = 64
 
 -- CROSS-GUILD TESTING SWITCH
 -- Keep this true while testing characters that are not in the same guild.
@@ -1024,7 +1025,13 @@ function Sync:QueueMessage(message, channel, target, priority, tag)
         or not self:CanQueueMessages(1, priority) then return false end
     local queue = self.sendQueues and self.sendQueues[priority]
     if not queue then return false end
-    QueuePush(queue, { message = message, channel = channel, target = target, tag = tag })
+    QueuePush(queue, {
+        message = message,
+        channel = channel,
+        target = target,
+        priority = priority,
+        tag = tag,
+    })
     if tag then self.queuedTags[tag] = (self.queuedTags[tag] or 0) + 1 end
     return true
 end
@@ -1039,7 +1046,8 @@ end
 
 function Sync:GetQueueCount()
     if not self.sendQueues then return 0 end
-    return QueueLength(self.sendQueues.ALERT) + QueueLength(self.sendQueues.NORMAL) + QueueLength(self.sendQueues.BULK)
+    return QueueLength(self.sendQueues.ALERT) + QueueLength(self.sendQueues.NORMAL)
+        + QueueLength(self.sendQueues.BULK) + (self.inFlightCount or 0)
 end
 
 function Sync:CanQueueMessages(count, priority)
@@ -1051,16 +1059,17 @@ end
 function Sync:PopMessage()
     for _, priority in ipairs(MESSAGE_PRIORITIES) do
         local item = QueuePop(self.sendQueues[priority])
-        if item then
-            if item.tag then
-                self.queuedTags[item.tag] = math.max(0, (self.queuedTags[item.tag] or 1) - 1)
-                if self.queuedTags[item.tag] == 0 then
-                    self.queuedTags[item.tag] = nil
-                    self.tagFinishedAt[item.tag] = Now()
-                end
-            end
-            return item
-        end
+        if item then return item end
+    end
+end
+
+function Sync:CompleteQueuedMessage(item)
+    if not item or not item.tag then return end
+    local tag = item.tag
+    self.queuedTags[tag] = math.max(0, (self.queuedTags[tag] or 1) - 1)
+    if self.queuedTags[tag] == 0 then
+        self.queuedTags[tag] = nil
+        self.tagFinishedAt[tag] = Now()
     end
 end
 
@@ -1708,20 +1717,54 @@ function Sync:HandleMessage(message, channel, sender)
 end
 
 function Sync:OnUpdate(elapsed)
-    if not FeatureAvailable("guild_sync_send") and not FeatureAvailable("guild_sync_receive") then
-        return
+    self.availabilityElapsed = (self.availabilityElapsed or 0) + elapsed
+    if self.runtimeAvailable == nil or self.availabilityElapsed >= 0.5 then
+        self.availabilityElapsed = 0
+        self.runtimeAvailable = FeatureAvailable("guild_sync_send")
+            or FeatureAvailable("guild_sync_receive")
     end
+    if not self.runtimeAvailable then return end
+
     self.sendElapsed = self.sendElapsed + elapsed
-    if self.sendElapsed >= 0.15 and self:GetQueueCount() > 0 then
+    if self.sendElapsed >= 0.15
+        and (self.inFlightCount or 0) < MAX_THROTTLE_IN_FLIGHT then
         self.sendElapsed = 0
-        local queued = self:PopMessage()
-        if queued.channel ~= "GUILD" or GuildChannelAvailable() then
-            local called, result = pcall(SendAddonMessage, PREFIX, queued.message, queued.channel, queued.target)
-            if not called or result == false then
-                self:Log("Send failed on " .. tostring(queued.channel) .. ": " .. tostring(result))
+        if self:GetQueueCount() > 0 then
+            local queued = self:PopMessage()
+            if queued and queued.channel == "GUILD" and not GuildChannelAvailable() then
+                self:CompleteQueuedMessage(queued)
+            elseif queued and ChatThrottleLib
+                and type(ChatThrottleLib.SendAddonMessage) == "function" then
+                self.inFlightCount = (self.inFlightCount or 0) + 1
+                local completed = false
+                local function OnSent(item)
+                    if completed then return end
+                    completed = true
+                    Sync.inFlightCount = math.max(0, (Sync.inFlightCount or 1) - 1)
+                    Sync:CompleteQueuedMessage(item)
+                end
+                local queueName = PREFIX .. tostring(queued.channel or "")
+                    .. tostring(queued.target or "")
+                local called, reason = pcall(ChatThrottleLib.SendAddonMessage,
+                    ChatThrottleLib, queued.priority or "NORMAL", PREFIX,
+                    queued.message, queued.channel, queued.target, queueName,
+                    OnSent, queued)
+                if not called then
+                    OnSent(queued)
+                    self:Log("Send failed on " .. tostring(queued.channel)
+                        .. ": " .. tostring(reason))
+                end
+            elseif queued then
+                self:CompleteQueuedMessage(queued)
+                self:Log("Send failed: ChatThrottleLib unavailable")
             end
         end
     end
+
+    self.maintenanceElapsed = (self.maintenanceElapsed or 0) + elapsed
+    if self.maintenanceElapsed < 0.25 then return end
+    local maintenanceElapsed = self.maintenanceElapsed
+    self.maintenanceElapsed = 0
 
     local now = Now()
     local editReady = self:IsOfficialEditReady()
@@ -1774,7 +1817,7 @@ function Sync:OnUpdate(elapsed)
         end
     end
 
-    self.tagCleanupElapsed = (self.tagCleanupElapsed or 0) + elapsed
+    self.tagCleanupElapsed = (self.tagCleanupElapsed or 0) + maintenanceElapsed
     if self.tagCleanupElapsed >= 60 then
         self.tagCleanupElapsed = 0
         for tag, finishedAt in pairs(self.tagFinishedAt) do
@@ -1787,7 +1830,6 @@ function Sync:Initialize()
     if self.initialized or not SendAddonMessage then
         return
     end
-    self.initialized = true
     self.selfKey = PeerKey(UnitName("player"))
     self.peers = {}
     self.sendQueues = { ALERT = NewMessageQueue(), NORMAL = NewMessageQueue(), BULK = NewMessageQueue() }
@@ -1797,6 +1839,10 @@ function Sync:Initialize()
     self.incoming = {}
     self.lastRequest = {}
     self.sendElapsed = 0
+    self.inFlightCount = 0
+    self.maintenanceElapsed = 0
+    self.availabilityElapsed = 0
+    self.runtimeAvailable = nil
     self.nextHeartbeat = Now() + 2
     self.nextDiscovery = Now() + 3
     self.lastLeader = nil
@@ -1845,4 +1891,5 @@ function Sync:Initialize()
         Sync:OnUpdate(elapsed)
     end)
     self.frame = frame
+    self.initialized = true
 end

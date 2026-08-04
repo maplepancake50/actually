@@ -320,6 +320,9 @@ function SpellConfig:Initialize()
 end
 
 function SpellConfig:Show()
+    if ARC.OfficerConfig and ARC.OfficerConfig.frame then
+        return ARC.OfficerConfig:Show("spells")
+    end
     if not ARC:RequireConfigurationAuthority() then return false end
     self:Refresh()
     self.frame:Show()
@@ -327,6 +330,9 @@ function SpellConfig:Show()
 end
 
 function SpellConfig:Toggle()
+    if ARC.OfficerConfig and ARC.OfficerConfig.frame then
+        return ARC.OfficerConfig:Toggle("spells")
+    end
     if self.frame:IsShown() then
         self.search:ClearFocus()
         self.frame:Hide()

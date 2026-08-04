@@ -10,6 +10,31 @@ local function validString(value, maximum)
     return type(value) == "string" and #value > 0 and #value <= maximum
 end
 
+local KNOWN_MESSAGE_TYPES = {
+    REQ = true,
+    STATE = true,
+    CAST = true,
+    LEASE_CLAIM = true,
+    LEASE_HOLD = true,
+    LEASE_RELEASE = true,
+    USE_REQ = true,
+    USE_STATUS = true,
+    USE_CANCEL = true,
+    USE_SYNC = true,
+    USE_END = true,
+    BUNDLE_REQ = true,
+    BUNDLE_STATUS = true,
+    BUNDLE_CANCEL = true,
+    BUNDLE_SYNC = true,
+    BUNDLE_END = true,
+    COMBO_PREP = true,
+    COMBO_STATUS = true,
+    COMBO_DROP = true,
+    COMBO_GO = true,
+    COMBO_SYNC = true,
+    COMBO_END = true,
+}
+
 function Comms:Initialize()
     self.session = tostring(time and time() or 0) .. ":" .. tostring(math.random(100000, 999999))
     self.sequence = 0
@@ -30,18 +55,53 @@ function Comms:NextSequence()
     return self.sequence
 end
 
-function Comms:Send(messageType, priority, ...)
+function Comms:SendInternal(messageType, priority, onComplete, ...)
     local distribution = ARC.Roster:GetDistribution()
-    if not distribution then return false end
+    local captureDiagnostics = ARC.Diagnostics and ARC.Diagnostics.RecordARC
+        and ARC.Diagnostics.IsCaptureEnabled and ARC.Diagnostics:IsCaptureEnabled()
+    local fields = captureDiagnostics and { n = select("#", ...), ... } or nil
+    if not distribution then
+        if captureDiagnostics then
+            ARC.Diagnostics:RecordARC("BLOCK", messageType, "no group channel",
+                fields, 1, ARC.Constants.PROTOCOL_VERSION)
+        end
+        return false
+    end
     local payload = ARC:Serialize(messageType, ARC.Constants.PROTOCOL_VERSION, ...)
-    ARC:SendCommMessage(ARC.Constants.COMM_PREFIX, payload, distribution, nil, priority or "NORMAL")
+    local sendPriority = priority or "NORMAL"
+    if #payload > 254 - #ARC.Constants.COMM_PREFIX then
+        -- AceComm has one multipart stream per prefix/distribution/sender.
+        -- Keeping all multipart messages on one CTL priority preserves FIFO
+        -- ordering while small alerts can still use the ALERT lane.
+        sendPriority = "NORMAL"
+    end
+    local completion
+    if type(onComplete) == "function" then
+        completion = function(_, sent, total)
+            if sent >= total then pcall(onComplete) end
+        end
+    end
+    ARC:SendCommMessage(ARC.Constants.COMM_PREFIX, payload, distribution, nil,
+        sendPriority, completion)
+    if captureDiagnostics then
+        ARC.Diagnostics:RecordARC("TX", messageType, distribution,
+            fields, 1, ARC.Constants.PROTOCOL_VERSION)
+    end
     return true
+end
+
+function Comms:Send(messageType, priority, ...)
+    return self:SendInternal(messageType, priority, nil, ...)
+end
+
+function Comms:SendWithCompletion(messageType, priority, onComplete, ...)
+    return self:SendInternal(messageType, priority, onComplete, ...)
 end
 
 function Comms:RequestState(force)
     local now = ARC:Now()
     if type(self.lastRequest) ~= "number" then self.lastRequest = -100 end
-    if not force and now - self.lastRequest < ARC.Constants.REQUEST_THROTTLE then return false end
+    if now - self.lastRequest < ARC.Constants.REQUEST_THROTTLE then return false end
     self.lastRequest = now
     return self:Send("REQ", "NORMAL", self.session)
 end
@@ -98,7 +158,7 @@ function Comms:SendCast(canonicalID, value, target)
     local charges = math.floor(math.max(0, tonumber(value.charges) or 0))
     local maxCharges = math.floor(math.max(0, tonumber(value.maxCharges) or 0))
     if target and #target > 60 then target = string.sub(target, 1, 60) end
-    return self:Send("CAST", "ALERT", self.session, self:NextSequence(), canonicalID,
+    return self:Send("CAST", "NORMAL", self.session, self:NextSequence(), canonicalID,
         remaining, duration, target, charges, maxCharges)
 end
 
@@ -160,15 +220,59 @@ function Comms:SendBundleCancel(itemID, attemptID, leaseToken, targetKey)
         itemID, attemptID, leaseToken, targetKey)
 end
 
-function Comms:SendBundleSync(bundleID, bundleName, leaseToken, rows)
+function Comms:SendBundleSync(bundleID, bundleName, leaseToken, rows, onComplete)
     if #bundleName > 60 then bundleName = string.sub(bundleName, 1, 60) end
-    return self:Send("BUNDLE_SYNC", "NORMAL", self.session, self:NextSequence(),
-        bundleID, bundleName, leaseToken, rows)
+    return self:SendWithCompletion("BUNDLE_SYNC", "NORMAL", onComplete,
+        self.session, self:NextSequence(), bundleID, bundleName, leaseToken, rows)
 end
 
 function Comms:SendBundleEnd(bundleID, leaseToken)
     return self:Send("BUNDLE_END", "ALERT", self.session, self:NextSequence(),
         bundleID, leaseToken)
+end
+
+function Comms:SendComboPrepare(comboID, comboName, actionID, attemptID,
+    leaseToken, targetKey, canonicalID, offset)
+    if #comboName > 60 then comboName = string.sub(comboName, 1, 60) end
+    local offsetTenths = tonumber(offset) or 0
+    if offsetTenths >= 0 then
+        offsetTenths = math.floor(offsetTenths * 10 + 0.5)
+    else
+        offsetTenths = math.ceil(offsetTenths * 10 - 0.5)
+    end
+    return self:Send("COMBO_PREP", "ALERT", self.session, self:NextSequence(),
+        comboID, comboName, actionID, attemptID, leaseToken, targetKey,
+        canonicalID, offsetTenths)
+end
+
+function Comms:SendComboStatus(comboID, actionID, attemptID, leaseToken,
+    status, canonicalID)
+    return self:Send("COMBO_STATUS", "ALERT", self.session, self:NextSequence(),
+        comboID, actionID, attemptID, leaseToken, status, canonicalID)
+end
+
+function Comms:SendComboDrop(comboID, actionID, attemptID, leaseToken, targetKey)
+    return self:Send("COMBO_DROP", "ALERT", self.session, self:NextSequence(),
+        comboID, actionID, attemptID, leaseToken, targetKey)
+end
+
+function Comms:SendComboGo(comboID, comboName, leaseToken, leadTime, rows)
+    if #comboName > 60 then comboName = string.sub(comboName, 1, 60) end
+    return self:Send("COMBO_GO", "ALERT", self.session, self:NextSequence(),
+        comboID, comboName, leaseToken,
+        math.floor(math.max(0, leadTime) * 10 + 0.5), rows)
+end
+
+function Comms:SendComboSync(comboID, comboName, leaseToken, anchorRemaining, rows, onComplete)
+    if #comboName > 60 then comboName = string.sub(comboName, 1, 60) end
+    return self:SendWithCompletion("COMBO_SYNC", "NORMAL", onComplete,
+        self.session, self:NextSequence(), comboID, comboName, leaseToken,
+        math.floor(math.max(0, anchorRemaining) * 10 + 0.5), rows)
+end
+
+function Comms:SendComboEnd(comboID, leaseToken)
+    return self:Send("COMBO_END", "ALERT", self.session, self:NextSequence(),
+        comboID, leaseToken)
 end
 
 function Comms:SchedulePeriodicReport()
@@ -207,7 +311,8 @@ function Comms:DecodeRows(serializedRows)
 end
 
 function Comms:OnCommReceived(prefix, message, distribution, sender)
-    if prefix ~= ARC.Constants.COMM_PREFIX or type(message) ~= "string" then return end
+    if prefix ~= ARC.Constants.COMM_PREFIX or type(message) ~= "string"
+        or #message > ARC.Constants.MAX_COMM_BYTES then return end
     local identity = ARC.Roster:FindSender(sender)
     if not identity then
         ARC:Debug("rejected message from non-roster sender " .. tostring(sender))
@@ -218,10 +323,18 @@ function Comms:OnCommReceived(prefix, message, distribution, sender)
 
     local decoded = { ARC:Deserialize(message) }
     if not decoded[1] then
+        if ARC.Diagnostics and ARC.Diagnostics.RecordInternal then
+            ARC.Diagnostics:RecordInternal("ERROR",
+                "malformed ARC message from " .. tostring(sender))
+        end
         ARC:Debug("rejected malformed message")
         return
     end
     local messageType, protocol = decoded[2], decoded[3]
+    if ARC.Diagnostics and ARC.Diagnostics.RecordARC then
+        ARC.Diagnostics:RecordARC("RX", messageType, identity.name,
+            decoded, 4, protocol)
+    end
     if protocol ~= ARC.Constants.PROTOCOL_VERSION then
         if not self.protocolWarnings[identity.key] then
             self.protocolWarnings[identity.key] = true
@@ -231,12 +344,19 @@ function Comms:OnCommReceived(prefix, message, distribution, sender)
         ARC:Debug("rejected protocol " .. tostring(protocol))
         return
     end
+    if not KNOWN_MESSAGE_TYPES[messageType] then
+        ARC:Debug("rejected unknown message type " .. tostring(messageType))
+        return
+    end
 
     if messageType == "REQ" then
         local now = ARC:Now()
-        if now - (self.remoteRequests[identity.key] or -100) < 3 then return end
+        if now - (self.remoteRequests[identity.key] or -100)
+            < ARC.Constants.REQUEST_THROTTLE then return end
         self.remoteRequests[identity.key] = now
-        self:ScheduleState(math.random(10, 40) / 100, "request")
+        local minimum = ARC.Constants.REQUEST_RESPONSE_MIN_DELAY
+        local maximum = ARC.Constants.REQUEST_RESPONSE_MAX_DELAY
+        self:ScheduleState(minimum + math.random() * (maximum - minimum), "request")
         return
     end
 
@@ -276,13 +396,17 @@ function Comms:OnCommReceived(prefix, message, distribution, sender)
             return
         end
         if messageType == "LEASE_CLAIM" then
-            ARC.Automation:OnLeaseClaim(identity, token, durationTenths / 10)
+            ARC.Automation:OnLeaseClaim(identity, token, durationTenths / 10,
+                session, sequence)
         else
-            ARC.Automation:OnLeaseHold(identity, token, durationTenths / 10)
+            ARC.Automation:OnLeaseHold(identity, token, durationTenths / 10,
+                session, sequence)
         end
     elseif messageType == "LEASE_RELEASE" then
         local token = decoded[6]
-        if validString(token, 120) then ARC.Automation:OnLeaseRelease(identity, token) end
+        if validString(token, 120) then
+            ARC.Automation:OnLeaseRelease(identity, token, session, sequence)
+        end
     elseif messageType == "USE_REQ" then
         local requestID, attemptID, leaseToken, targetKey =
             decoded[6], decoded[7], decoded[8], decoded[9]
@@ -387,5 +511,70 @@ function Comms:OnCommReceived(prefix, message, distribution, sender)
         local bundleID, leaseToken = decoded[6], decoded[7]
         if not validString(bundleID, 120) or not validString(leaseToken, 120) then return end
         ARC.Bundles:OnRemoteEnd(identity, session, sequence, bundleID, leaseToken)
+    elseif messageType == "COMBO_PREP" then
+        local comboID, comboName, actionID, attemptID, leaseToken, targetKey =
+            decoded[6], decoded[7], decoded[8], decoded[9], decoded[10], decoded[11]
+        local canonicalID = ARC.Registry:Canonicalize(decoded[12])
+        local offsetTenths = decoded[13]
+        if not validString(comboID, 120) or not validString(comboName, 60)
+            or not validString(actionID, 140) or not validString(attemptID, 180)
+            or not validString(leaseToken, 120) or not validString(targetKey, 100)
+            or not canonicalID or not validInteger(offsetTenths, -100, 100) then return end
+        ARC.Combos:OnRemotePrepare(identity, session, sequence, comboID, comboName,
+            actionID, attemptID, leaseToken, targetKey, canonicalID,
+            offsetTenths / 10)
+    elseif messageType == "COMBO_STATUS" then
+        local comboID, actionID, attemptID, leaseToken, status =
+            decoded[6], decoded[7], decoded[8], decoded[9], decoded[10]
+        local canonicalID = ARC.Registry:Canonicalize(decoded[11])
+        local allowed = status == "READY" or status == "CAST" or status == "EARLY"
+            or status == "DEAD" or status == "OFFLINE" or status == "UNAVAILABLE"
+            or status == "BUSY" or status == "TIMEOUT"
+        if not validString(comboID, 120) or not validString(actionID, 140)
+            or not validString(attemptID, 180) or not validString(leaseToken, 120)
+            or not allowed or not canonicalID then return end
+        ARC.Combos:OnRemoteStatus(identity, session, sequence, comboID, actionID,
+            attemptID, leaseToken, status, canonicalID)
+    elseif messageType == "COMBO_DROP" then
+        local comboID, actionID, attemptID, leaseToken, targetKey =
+            decoded[6], decoded[7], decoded[8], decoded[9], decoded[10]
+        if not validString(comboID, 120) or not validString(actionID, 140)
+            or not validString(attemptID, 180) or not validString(leaseToken, 120)
+            or not validString(targetKey, 100) then return end
+        ARC.Combos:OnRemoteDrop(identity, session, sequence, comboID, actionID,
+            attemptID, leaseToken, targetKey)
+    elseif messageType == "COMBO_GO" or messageType == "COMBO_SYNC" then
+        local comboID, comboName, leaseToken, anchorTenths, encodedRows =
+            decoded[6], decoded[7], decoded[8], decoded[9], decoded[10]
+        if not validString(comboID, 120) or not validString(comboName, 60)
+            or not validString(leaseToken, 120)
+            or not validInteger(anchorTenths, 0, 250)
+            or type(encodedRows) ~= "table" then return end
+        local rows = {}
+        for index, row in ipairs(encodedRows) do
+            if index > ARC.Constants.MAX_COMBO_ACTIONS or type(row) ~= "table" then return end
+            local canonicalID = ARC.Registry:Canonicalize(row[4])
+            if not validString(row[1], 140) or not validString(row[2], 180)
+                or not validString(row[3], 100) or not canonicalID
+                or not validInteger(row[5], -100, 100) then return end
+            table.insert(rows, {
+                actionID = row[1],
+                attemptID = row[2],
+                targetKey = row[3],
+                spellID = canonicalID,
+                offset = row[5] / 10,
+            })
+        end
+        if messageType == "COMBO_GO" then
+            ARC.Combos:OnRemoteGo(identity, session, sequence, comboID,
+                comboName, leaseToken, anchorTenths / 10, rows)
+        else
+            ARC.Combos:OnRemoteSync(identity, session, sequence, comboID,
+                comboName, leaseToken, anchorTenths / 10, rows)
+        end
+    elseif messageType == "COMBO_END" then
+        local comboID, leaseToken = decoded[6], decoded[7]
+        if not validString(comboID, 120) or not validString(leaseToken, 120) then return end
+        ARC.Combos:OnRemoteEnd(identity, session, sequence, comboID, leaseToken)
     end
 end

@@ -233,7 +233,7 @@ function TestUI:Initialize()
 end
 
 function TestUI:Refresh(rows, groups)
-    if not self.frame then return end
+    if not self.frame or not self.frame:IsShown() then return end
     local ordered = {}
     for _, spells in pairs(groups or {}) do
         for _, row in ipairs(spells) do table.insert(ordered, row) end
@@ -241,6 +241,8 @@ function TestUI:Refresh(rows, groups)
     table.sort(ordered, function(left, right) return ARC.Renderer:CompareRows(left, right) end)
 
     local count = math.min(table.getn(ordered), MAX_ROWS)
+    local isCoordinator = ARC.Roster:IsLocalCoordinator()
+    local outgoing = ARC.Requests.outgoing
     for index = 1, count do
         local data = ordered[index]
         local widget = self.widgets[index] or self:CreateRow(index)
@@ -251,8 +253,7 @@ function TestUI:Refresh(rows, groups)
         widget.cooldown:SetText(text)
         widget.cooldown:SetTextColor(red, green, blue)
         widget:SetAlpha((data.connected == false or data.dead) and 0.5 or 1.0)
-        local outgoing = ARC.Requests.outgoing
-        if ARC.Roster:IsLocalCoordinator() then
+        if isCoordinator then
             widget.action:Show()
             if ARC.Requests:IsOutgoingTarget(data.playerKey, data.spellID) then
                 widget.action:SetText("CANCEL")
@@ -289,6 +290,12 @@ end
 function TestUI:Toggle()
     local shown = not self.frame:IsShown()
     ARC.db.profile.testUI.shown = shown
-    if shown then self.frame:Show() else self.frame:Hide() end
+    if shown then
+        self.frame:Show()
+        -- Rows are intentionally left dirty while this window is hidden.
+        ARC.Renderer:Reconcile()
+    else
+        self.frame:Hide()
+    end
     return shown
 end

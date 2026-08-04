@@ -145,7 +145,7 @@ function Debug:APIProbe(argument)
     end
 
     if C_Spell then
-        callProbe("C_Spell:IsAnyRankKnown(id)", C_Spell.IsAnyRankKnown, C_Spell, spellID)
+        callProbe("C_Spell.IsAnyRankKnown(id)", C_Spell.IsAnyRankKnown, spellID)
         callProbe("C_Spell.GetFirstRank(id)", C_Spell.GetFirstRank, spellID)
         callProbe("C_Spell:GetSpellID(id)", C_Spell.GetSpellID, C_Spell, spellID)
     else
@@ -260,7 +260,7 @@ function Debug:FindHiddenTalents()
                 known = knownOK and result and true or false
             end
             if not known and C_Spell and type(C_Spell.IsAnyRankKnown) == "function" then
-                local knownOK, result = pcall(C_Spell.IsAnyRankKnown, C_Spell, spellID)
+                local knownOK, result = pcall(C_Spell.IsAnyRankKnown, spellID)
                 known = knownOK and result and true or false
             end
 
@@ -289,10 +289,10 @@ function Debug:FindHiddenTalents()
 end
 
 function Debug:Help()
-    if ARC:HasCommandAuthority() then
-        ARC:Print("/arc commands: commander [config], config, bundles, ui, spoof, specprobe, probe, apiprobe <id>, findhidden, scan, state, peers, request, test, debug, dumpbook [filter], dumptalents [filter]")
+    if Actually.CanViewCommandHelp and Actually:CanViewCommandHelp() then
+        ARC:Print("/arc commands: activity, diagnostics, commander [config], config, bundles, combos, ui, spoof, specprobe, probe, apiprobe <id>, findhidden, scan, state, peers, request, test, debug, dumpbook [filter], dumptalents [filter]")
     else
-        ARC:Print("/arc commands: ui, specprobe, scan, state, peers, request")
+        ARC:Print("command unavailable")
     end
 end
 
@@ -304,7 +304,23 @@ function Debug:Handle(input)
     input = input or ""
     local command, argument = string.match(input, "^%s*(%S*)%s*(.-)%s*$")
     command = string.lower(command or "")
-    if command == "config" then
+    if command == "diagnostics" or command == "diag" or command == "testpanel" then
+        if ARC.Diagnostics and ARC.Diagnostics.initialized and ARC.Diagnostics.Toggle then
+            local shown = ARC.Diagnostics:Toggle()
+            ARC:Print("diagnostic panel " .. (shown and "shown" or "hidden"))
+        else
+            ARC:Print("Diagnostics unavailable; fully restart the game client")
+        end
+    elseif command == "activity" or command == "history"
+        or command == "responses" or command == "performance" then
+        if not ARC:RequireCommandAuthority() then return end
+        if ARC.Activity and ARC.Activity.initialized and ARC.Activity.Toggle then
+            local shown = ARC.Activity:Toggle()
+            ARC:Print("response history " .. (shown and "shown" or "hidden"))
+        else
+            ARC:Print("Activity unavailable; fully restart the game client")
+        end
+    elseif command == "config" then
         if not canConfigure() then return end
         if ARC.SpellConfig and ARC.SpellConfig.Toggle then
             ARC.SpellConfig:Toggle()
@@ -319,10 +335,10 @@ function Debug:Handle(input)
             ARC:Print("CommanderConfig unavailable; fully restart the game client")
         end
     elseif command == "commander" then
-        if argument ~= "" then
-            ARC:Print("usage: /arc commander [config]")
-        elseif not ARC:RequireCommandAuthority() then
+        if not ARC:RequireCommandAuthority() then
             return
+        elseif argument ~= "" then
+            ARC:Print("usage: /arc commander [config]")
         elseif ARC.Commander and ARC.Commander.Toggle then
             local shown = ARC.Commander:Toggle()
             ARC:Print("commander bar " .. (shown and "shown" or "hidden"))
@@ -343,6 +359,13 @@ function Debug:Handle(input)
         else
             ARC:Print("BundleConfig unavailable; fully restart the game client")
         end
+    elseif command == "combos" or command == "combo" then
+        if not canConfigure() then return end
+        if ARC.ComboConfig and ARC.ComboConfig.Toggle then
+            ARC.ComboConfig:Toggle()
+        else
+            ARC:Print("ComboConfig unavailable; fully restart the game client")
+        end
     elseif command == "ui" then
         local shown = ARC.TestUI:Toggle()
         ARC:Print("test UI " .. (shown and "shown" or "hidden"))
@@ -358,13 +381,16 @@ function Debug:Handle(input)
             ARC:Print("SpecAPIProbe unavailable; fully restart the game client")
         end
     elseif command == "probe" then self:Probe()
-    elseif command == "apiprobe" then self:APIProbe(argument)
+    elseif command == "apiprobe" then
+        if not ARC:RequireCommandAuthority() then return end
+        self:APIProbe(argument)
     elseif command == "scan" then ARC.Spellbook:Scan("manual"); ARC:Print("scan complete")
     elseif command == "state" then self:State()
     elseif command == "peers" then self:Peers()
     elseif command == "request" then ARC.Comms:RequestState(true); ARC:Print("state requested")
     elseif command == "test" then
         local active = ARC.TestMode:Toggle()
+        ARC.Renderer:Reconcile()
         ARC:Print("test state " .. (active and "enabled" or "disabled") .. "; rows=" .. ARC.Renderer:CountRows())
     elseif command == "debug" then
         if not ARC:RequireCommandAuthority() then return end

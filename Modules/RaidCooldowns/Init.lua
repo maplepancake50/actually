@@ -64,9 +64,12 @@ function ARC:Initialize()
         self.CooldownReader:Initialize()
         self.Renderer:Initialize()
         initializeOptional("AlertUI")
+        initializeOptional("Activity")
         self.Automation:Initialize()
         self.Requests:Initialize()
         self.Bundles:Initialize()
+        self.Combos:Initialize()
+        initializeOptional("Diagnostics")
         self.Comms:Initialize()
         self.Spellbook:StartGroupedFallbackScans()
         self.DebugCommands:RegisterSlashCommands()
@@ -89,6 +92,7 @@ function ARC:Initialize()
     initializeOptional("SpecAPIProbe")
     initializeOptional("BundleConfig")
     initializeOptional("CommanderConfig")
+    initializeOptional("ComboConfig")
     initializeOptional("OfficerConfig")
     initializeOptional("TestUI")
     initializeOptional("SpoofTest")
@@ -102,6 +106,9 @@ function Events.ADDON_LOADED(loadedAddon)
 end
 
 function Events.PLAYER_ENTERING_WORLD()
+    if ARC.Activity and ARC.Activity.OnLocationChanged then
+        ARC.Activity:OnLocationChanged()
+    end
     ARC.Roster:Scan()
     ARC.Spellbook:ScheduleSafetyScans()
     ARC.Spellbook:ScheduleScan(0.1, "entering world")
@@ -121,6 +128,10 @@ function Events.PLAYER_TALENT_UPDATE()
     ARC.Spellbook:ScheduleScan(0.2, "talent update")
 end
 
+function Events.PLAYER_REGEN_ENABLED()
+    ARC.Spellbook:RunDeferredScan()
+end
+
 function Events.SPELL_UPDATE_COOLDOWN()
     ARC.CooldownReader:ScheduleRefresh(0.08, "cooldown event")
 end
@@ -128,6 +139,7 @@ end
 function Events.PLAYER_DEAD()
     ARC.Requests:OnPlayerDeath()
     ARC.Bundles:OnPlayerDeath()
+    ARC.Combos:OnPlayerDeath()
 end
 
 function Events.COMBAT_LOG_EVENT_UNFILTERED(...)
@@ -143,18 +155,23 @@ end
 
 local function unitStatusChanged(unit)
     if not unit or not UnitExists(unit) then return end
-    local identity = ARC.Roster:FindGUID(UnitGUID and UnitGUID(unit))
-    if not identity then return end
-    local connected = not UnitIsConnected or UnitIsConnected(unit) and true or false
-    local dead = UnitIsDeadOrGhost and UnitIsDeadOrGhost(unit) and true or false
-    if identity.connected ~= connected or identity.dead ~= dead then rosterChanged() end
+    local changed, connected, wasConnected = ARC.Roster:UpdateUnitStatus(unit)
+    if changed and connected and wasConnected == false then
+        ARC.Comms:RequestState(false)
+        ARC.Comms:ScheduleState(0.5, "unit reconnected")
+    end
 end
 
 Events.RAID_ROSTER_UPDATE = rosterChanged
 Events.PARTY_MEMBERS_CHANGED = rosterChanged
 Events.PLAYER_GUILD_UPDATE = rosterChanged
 Events.UPDATE_BATTLEFIELD_STATUS = rosterChanged
-Events.ZONE_CHANGED_NEW_AREA = rosterChanged
+function Events.ZONE_CHANGED_NEW_AREA()
+    if ARC.Activity and ARC.Activity.OnLocationChanged then
+        ARC.Activity:OnLocationChanged()
+    end
+    rosterChanged()
+end
 Events.UNIT_CONNECTION = unitStatusChanged
 Events.UNIT_FLAGS = unitStatusChanged
 

@@ -7,7 +7,8 @@ local Util = Addon.Util or {}
 Addon.Util = Util
 
 Addon.name = addonName or "actually"
-Addon.version = "0.3.7"
+local tocVersion = GetAddOnMetadata and GetAddOnMetadata(Addon.name, "Version")
+Addon.version = tocVersion and tocVersion ~= "" and tocVersion or "0.3.15"
 Addon.MESSAGE_PREFIX = "ACTUALLY"
 Addon.tierOrder = { "S", "A", "B", "C", "D", "U" }
 Addon.DEFAULT_PERSONAL_LIST_NAME = "My Tier List"
@@ -98,6 +99,31 @@ local defaults = {
     },
     raidCC = {
         enabled = false,
+    },
+    enemyMarkers = {
+        enabled = false,
+        selectedCategory = "healer",
+        presetVersion = 0,
+        categories = {
+            healer = {
+                enabled = true,
+                names = "",
+                color = "green",
+                size = 44,
+                height = 12,
+                pulse = false,
+                glow = true,
+            },
+            frontline = {
+                enabled = true,
+                names = "",
+                color = "red",
+                size = 44,
+                height = 12,
+                pulse = false,
+                glow = true,
+            },
+        },
     },
     cacheTips = {
         healer = "",
@@ -348,6 +374,17 @@ function Addon:Print(message)
     DEFAULT_CHAT_FRAME:AddMessage("|cff69ccf0actually:|r " .. tostring(message))
 end
 
+function Addon:CanViewCommandHelp()
+    local guildName = GetGuildInfo and GetGuildInfo("player")
+    if string.lower(Util.Trim(guildName)) ~= "actually" then
+        return false
+    end
+    return self.Official and (
+        (self.Official.IsOfficer and self.Official:IsOfficer())
+        or (self.Official.IsLeader and self.Official:IsLeader())
+    ) and true or false
+end
+
 function Addon:ResetBoard()
     if self.FeatureSwitches and not self.FeatureSwitches:Require("tier_write", "Tier-list updates") then
         return
@@ -426,6 +463,9 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
     if Addon.RaidCC then
         Addon.RaidCC:Initialize()
     end
+    if Addon.EnemyMarkers then
+        Addon.EnemyMarkers:Initialize()
+    end
     if Addon.CacheTips then
         Addon.CacheTips:Create()
     end
@@ -493,11 +533,15 @@ eventFrame:SetScript("OnEvent", function(self, event, loadedAddon)
             Addon.AssistLogUI:Show()
         elseif string.sub(lowerMessage, 1, 14) == "assisttracker " and Addon.RaidTargets then
             if not Addon.RaidTargets:HandleCommand(string.sub(rawMessage, 15)) then
-                Addon:Print("Assist Tracker: start [fight], stop, toggle [fight], timer, caller <player|target|me>, pending [retry|clear]")
+                if Addon:CanViewCommandHelp() then
+                    Addon:Print("Assist Tracker: start [fight], stop, toggle [fight], timer, caller <player|target|me>, pending [retry|clear]")
+                end
             end
         elseif string.sub(lowerMessage, 1, 15) == "assist tracker " and Addon.RaidTargets then
             if not Addon.RaidTargets:HandleCommand(string.sub(rawMessage, 16)) then
-                Addon:Print("Assist Tracker: start [fight], stop, toggle [fight], timer, caller <player|target|me>, pending [retry|clear]")
+                if Addon:CanViewCommandHelp() then
+                    Addon:Print("Assist Tracker: start [fight], stop, toggle [fight], timer, caller <player|target|me>, pending [retry|clear]")
+                end
             end
         elseif (lowerMessage == "caller" or lowerMessage == "shotcaller") and Addon.RaidTargets then
             Addon.RaidTargets:HandleCommand("caller")

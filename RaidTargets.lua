@@ -1352,7 +1352,13 @@ end
 
 function RaidTargets:OnUpdate(elapsed)
     self.updateElapsed = (self.updateElapsed or 0) + elapsed
-    if self.updateElapsed < UPDATE_INTERVAL then return end
+    local activeWork = self.activeOfficerRun
+        or next(self.receivingFights or {})
+        or next(self.participantRuns or {})
+        or next(Addon.db.assistLog.pendingUploads or {})
+        or next(self.incomingTransfers or {})
+    local updateInterval = activeWork and UPDATE_INTERVAL or 1
+    if self.updateElapsed < updateInterval then return end
     elapsed = self.updateElapsed
     self.updateElapsed = 0
     local now = Now()

@@ -18,17 +18,29 @@ ARC.Constants = {
     GLOBAL_TABLE = "Actually.Modules.RaidCooldowns",
     SAVED_VARIABLES = "ActuallyDB",
     COMM_PREFIX = "ARC",
-    PROTOCOL_VERSION = 6,
+    TEST_PREFIX = "ARCTEST",
+    PROTOCOL_VERSION = 8,
+    TEST_WIRE_VERSION = 1,
     SLASH_KEY = "ACTUALLY_RAID_COOLDOWNS",
     SLASH_COMMANDS = { "/arc", "/actuallyraidcooldowns" },
     BOOK_TYPE = BOOKTYPE_SPELL or "spell",
     MAX_COOLDOWN = 604800,
     MAX_BUNDLE_SPELLS = 12,
     MAX_COMMAND_PLANS = 12,
+    MAX_TIMED_COMBOS = 12,
+    MAX_COMBO_ACTIONS = 8,
     BUNDLE_SYNC_INTERVAL = 3.0,
     BUNDLE_SYNC_TIMEOUT = 12.0,
     USE_SYNC_INTERVAL = 2.0,
     USE_SYNC_TIMEOUT = 7.0,
+    COMBO_PREFLIGHT_TIMEOUT = 2.0,
+    COMBO_PREFLIGHT_RETRIES = 1,
+    COMBO_SYNC_INTERVAL = 1.0,
+    COMBO_SYNC_TIMEOUT = 4.0,
+    COMBO_EARLY_TOLERANCE = 0.50,
+    COMBO_LATE_TOLERANCE = 2.0,
+    COMBO_SAME_PLAYER_MIN_GAP = 1.5,
+    COMMANDER_PAGE_SIZE = 12,
     LEASE_CLAIM_WINDOW = 0.35,
     LEASE_HEARTBEAT_INTERVAL = 3.0,
     LEASE_DURATION = 15.0,
@@ -36,6 +48,9 @@ ARC.Constants = {
     OBSERVED_CAST_HOLD = 5.0,
     REPORT_MIN_INTERVAL = 1.0,
     REQUEST_THROTTLE = 5.0,
+    REQUEST_RESPONSE_MIN_DELAY = 0.5,
+    REQUEST_RESPONSE_MAX_DELAY = 2.0,
+    MAX_COMM_BYTES = 8192,
     REPORT_STALE_AFTER = 45.0,
     REPORT_FORGET_AFTER = 300.0,
     GROUP_CAPABILITY_SCAN_INTERVAL = 10.0,
@@ -55,15 +70,22 @@ function ARC:Now()
     return GetTime and GetTime() or 0
 end
 
-function ARC:Print(message)
+function ARC:Print(message, suppressDiagnostic)
+    if not suppressDiagnostic
+        and self.Diagnostics and self.Diagnostics.RecordInternal then
+        self.Diagnostics:RecordInternal("PRINT", message)
+    end
     if DEFAULT_CHAT_FRAME then
         DEFAULT_CHAT_FRAME:AddMessage("|cff80c0ffARC:|r " .. tostring(message))
     end
 end
 
 function ARC:Debug(message)
+    if self.Diagnostics and self.Diagnostics.RecordInternal then
+        self.Diagnostics:RecordInternal("DEBUG", message)
+    end
     if self.db and self.db.profile and self.db.profile.debug then
-        self:Print("|cffaaaaaa" .. tostring(message) .. "|r")
+        self:Print("|cffaaaaaa" .. tostring(message) .. "|r", true)
     end
 end
 
@@ -104,10 +126,14 @@ function ARC:EnforceAuthorityVisibility()
     if self:HasCommandAuthority() then return true end
     for _, moduleName in ipairs({
         "Commander", "CommanderConfig", "BundleConfig", "OfficerConfig",
-        "SpellConfig", "UserList",
+        "ComboConfig", "SpellConfig", "UserList", "Activity",
     }) do
         local module = self[moduleName]
-        if module and module.frame and module.frame:IsShown() then module.frame:Hide() end
+        local publicConsole = moduleName == "OfficerConfig"
+            and module and module.IsPublicTab and module:IsPublicTab()
+        if not publicConsole and module and module.frame and module.frame:IsShown() then
+            module.frame:Hide()
+        end
     end
     if self.Bundles and self.Bundles.officerSummary
         and self.Bundles.officerSummary:IsShown() then

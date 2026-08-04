@@ -44,7 +44,7 @@ end
 local function isAscensionSpellKnown(spellID)
     if type(spellID) ~= "number" then return false end
     if C_Spell and type(C_Spell.IsAnyRankKnown) == "function" then
-        local ok, known = pcall(C_Spell.IsAnyRankKnown, C_Spell, spellID)
+        local ok, known = pcall(C_Spell.IsAnyRankKnown, spellID)
         if ok and known then return true end
     end
     if type(CA_IsSpellKnown) == "function" then
@@ -58,9 +58,14 @@ function Spellbook:Initialize()
     self.capabilities = {}
     self.capabilityRevision = 0
     self.scanGeneration = 0
+    self.deferredScanReason = nil
 end
 
 function Spellbook:ScheduleScan(delay, reason)
+    if self.scanGeneration > 0 and InCombatLockdown and InCombatLockdown() then
+        self.deferredScanReason = reason or self.deferredScanReason or "combat deferred"
+        return
+    end
     if self.scanTimer then ARC:CancelTimer(self.scanTimer, true) end
     self.scanTimer = ARC:ScheduleTimer(function()
         self.scanTimer = nil
@@ -85,6 +90,11 @@ function Spellbook:StartGroupedFallbackScans()
 end
 
 function Spellbook:Scan(reason)
+    if self.scanGeneration > 0 and InCombatLockdown and InCombatLockdown() then
+        self.deferredScanReason = reason or self.deferredScanReason or "combat deferred"
+        return false
+    end
+    self.deferredScanReason = nil
     local found = {}
     local tabs = GetNumSpellTabs and GetNumSpellTabs() or 0
     for tab = 1, tabs do
@@ -146,6 +156,14 @@ function Spellbook:Scan(reason)
     ARC.CooldownReader:RefreshFromCapabilities(changed and "capabilities" or "scan")
     if changed and ARC.Comms.initialized then ARC.Comms:ScheduleState(0.1, "capabilities") end
     return changed
+end
+
+function Spellbook:RunDeferredScan()
+    local reason = self.deferredScanReason
+    if not reason then return false end
+    self.deferredScanReason = nil
+    self:ScheduleScan(0.1, reason .. " (after combat)")
+    return true
 end
 
 function Spellbook:Count()

@@ -333,6 +333,11 @@ function Reporter:HandleMessage(message, channel, sender)
 end
 
 function Reporter:OnUpdate(elapsed)
+    self.updateElapsed = (self.updateElapsed or 0) + elapsed
+    local activeWork = table.getn(self.queue) > 0 or self.scanDueAt or self.manifestDueAt
+    if self.updateElapsed < (activeWork and 0.10 or 1) then return end
+    elapsed = self.updateElapsed
+    self.updateElapsed = 0
     local now = Now()
     self.elapsed = self.elapsed + elapsed
     self.bookPollElapsed = self.bookPollElapsed + elapsed
@@ -366,6 +371,7 @@ function Reporter:Initialize()
     self.queue = {}
     self.elapsed = 0
     self.bookPollElapsed = 0
+    self.updateElapsed = 0
     self.lastObservedBook = ActiveBook()
     if type(RegisterAddonMessagePrefix) == "function" then
         pcall(RegisterAddonMessagePrefix, PREFIX)

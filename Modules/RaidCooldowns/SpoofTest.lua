@@ -240,6 +240,10 @@ function SpoofTest:Initialize()
 end
 
 function SpoofTest:Toggle()
+    if ARC.OfficerConfig and ARC.OfficerConfig.frame
+        and ARC:HasConfigurationAuthority() then
+        return ARC.OfficerConfig:Toggle("spoof")
+    end
     local shown = not self.frame:IsShown()
     if shown then self:Refresh() self.frame:Show() else self.frame:Hide() end
     return shown

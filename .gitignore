@@ -1,5 +1,8 @@
 # Keep generated artwork experiments local; publish only textures used by the addon.
 Textures/*
+!Textures/*.blp
+!Textures/data/
+!Textures/data/Original_TGA_Backup_2026-07-27.zip
 !Textures/NerdFace.png
 !Textures/NerdFace.tga
 !Textures/AssistLogLogo.png

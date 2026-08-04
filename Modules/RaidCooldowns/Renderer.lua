@@ -6,6 +6,7 @@ function Renderer:Initialize()
     self.orderedGroups = {}
     self.dirty = true
     self.elapsed = 0
+    self.expiryElapsed = 0
 end
 
 function Renderer:MarkDirty(reason)
@@ -92,32 +93,66 @@ function Renderer:Reconcile()
     if self.onReconcile then self.onReconcile(self, rows, groups) end
 end
 
+function Renderer:NeedsFastUpdate()
+    if ARC.TestUI and ARC.TestUI.frame and ARC.TestUI.frame:IsShown() then return true end
+    if ARC.Commander and (ARC.Commander.pendingPlanID
+        or (ARC.Commander.frame and ARC.Commander.frame:IsShown())) then return true end
+    if ARC.Requests and (ARC.Requests.outgoing or ARC.Requests.incoming) then return true end
+    if ARC.Bundles and (ARC.Bundles.active or next(ARC.Bundles.incoming or {})) then return true end
+    if ARC.Combos and (ARC.Combos.pendingComboID or ARC.Combos.active
+        or next(ARC.Combos.incoming or {})) then return true end
+    if ARC.Diagnostics and (ARC.Diagnostics.role or ARC.Diagnostics.activeRunID
+        or ARC.Diagnostics.reportCollection
+        or (ARC.Diagnostics.frame and ARC.Diagnostics.frame:IsShown())) then return true end
+    return false
+end
+
 function Renderer:OnUpdate(elapsed)
     self.elapsed = self.elapsed + elapsed
-    if self.elapsed < ARC.Constants.UI_UPDATE_INTERVAL then return end
+    local updateInterval = self:NeedsFastUpdate()
+        and ARC.Constants.UI_UPDATE_INTERVAL or 1
+    if self.elapsed < updateInterval then return end
+    local updateElapsed = self.elapsed
     self.elapsed = 0
     if ARC.EnforceAuthorityVisibility then ARC:EnforceAuthorityVisibility() end
     local now = ARC:Now()
-    local needsReconcile = self.dirty
-    for _, spells in pairs(self.rows) do
-        for _, row in pairs(spells) do
-            local previous = row.remaining or 0
-            local remaining = math.max(0, (row.readyAt or 0) - now)
-            local shownBefore = math.ceil(previous)
-            row.remaining = remaining
-            row.ready = remaining <= 0
-            if shownBefore ~= math.ceil(remaining) and self.onTick then self.onTick(self, row) end
-            if previous > 0 and remaining <= 0 then needsReconcile = true end
+    local presentationActive = not (ARC.TestUI and ARC.TestUI.frame)
+        or ARC.TestUI.frame:IsShown()
+    if presentationActive then
+        local needsReconcile = self.dirty
+        local ticked = false
+        for _, spells in pairs(self.rows) do
+            for _, row in pairs(spells) do
+                local previous = row.remaining or 0
+                local remaining = math.max(0, (row.readyAt or 0) - now)
+                local shownBefore = math.ceil(previous)
+                row.remaining = remaining
+                row.ready = remaining <= 0
+                if shownBefore ~= math.ceil(remaining) then ticked = true end
+                if previous > 0 and remaining <= 0 then needsReconcile = true end
+            end
+        end
+        if needsReconcile then
+            self:Reconcile()
+        elseif ticked and self.onTick then
+            -- A raid can have many cooldowns cross a displayed second together.
+            -- Refresh consumers once for the batch instead of once per row.
+            self.onTick(self)
         end
     end
-    if needsReconcile then self:Reconcile() end
-    if ARC.State:ExpireRemoteReports() and ARC.Comms.initialized then
-        ARC.Comms:RequestState(false)
+    self.expiryElapsed = self.expiryElapsed + updateElapsed
+    if self.expiryElapsed >= 1 then
+        self.expiryElapsed = 0
+        if ARC.State:ExpireRemoteReports() and ARC.Comms.initialized then
+            ARC.Comms:RequestState(false)
+        end
     end
     if ARC.Automation and ARC.Automation.initialized then ARC.Automation:OnUpdate(now) end
     if ARC.Requests and ARC.Requests.initialized then ARC.Requests:OnUpdate(now) end
     if ARC.Bundles and ARC.Bundles.initialized then ARC.Bundles:OnUpdate(now) end
-    if ARC.Commander and ARC.Commander.initialized then ARC.Commander:OnUpdate(elapsed) end
+    if ARC.Combos and ARC.Combos.initialized then ARC.Combos:OnUpdate(now) end
+    if ARC.Diagnostics and ARC.Diagnostics.initialized then ARC.Diagnostics:OnUpdate(now) end
+    if ARC.Commander and ARC.Commander.initialized then ARC.Commander:OnUpdate(updateElapsed) end
 end
 
 function Renderer:CountRows()

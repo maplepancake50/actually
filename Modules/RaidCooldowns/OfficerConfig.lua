@@ -1,16 +1,89 @@
 local ARC = Actually.Modules.RaidCooldowns
 local OfficerConfig = ARC:NewModule("OfficerConfig")
 
-local FRAME_WIDTH = 1082
-local FRAME_HEIGHT = 696
-local HEADER_HEIGHT = 82
-local PANE_HEIGHT = 602
+local FRAME_WIDTH = 1120
+local FRAME_HEIGHT = 790
+local CONTENT_TOP = 94
 
 local BACKDROP = {
     bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
     edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
     tile = true, tileSize = 16, edgeSize = 12,
     insets = { left = 3, right = 3, top = 3, bottom = 3 },
+}
+
+local TABS = {
+    {
+        key = "plans",
+        label = "Plans",
+        width = 70,
+        officer = true,
+        description = "Build reusable cooldown bundles, then assemble them into commander buttons.",
+    },
+    {
+        key = "combos",
+        label = "Timed Combos",
+        width = 105,
+        officer = true,
+        module = "ComboConfig",
+        description = "Build synchronized countdowns with a separate timing offset for each cooldown.",
+    },
+    {
+        key = "spells",
+        label = "Spell Visibility",
+        width = 105,
+        officer = true,
+        module = "SpellConfig",
+        description = "Choose which registered cooldowns appear in the officer cooldown display.",
+    },
+    {
+        key = "activity",
+        label = "Activity",
+        width = 78,
+        officer = true,
+        module = "Activity",
+        description = "Review requested responses, timing misses, and unassigned cooldown uses.",
+    },
+    {
+        key = "diagnostics",
+        label = "Diagnostics",
+        width = 90,
+        module = "Diagnostics",
+        description = "Run the three-player ARC test harness and collect combined reports.",
+    },
+    {
+        key = "spoof",
+        label = "Spell Spoof",
+        width = 88,
+        officer = true,
+        module = "SpoofTest",
+        description = "Simulate registered cooldown ownership and uses for local officer testing.",
+    },
+    {
+        key = "probe",
+        label = "API Probe",
+        width = 82,
+        module = "SpecAPIProbe",
+        description = "Inspect Ascension build, specialization, spellbook, and talent APIs.",
+    },
+}
+
+local TAB_ALIASES = {
+    bundle = "plans",
+    bundles = "plans",
+    command = "plans",
+    commands = "plans",
+    commander = "plans",
+    combo = "combos",
+    config = "spells",
+    spell = "spells",
+    history = "activity",
+    responses = "activity",
+    performance = "activity",
+    diag = "diagnostics",
+    test = "diagnostics",
+    testpanel = "diagnostics",
+    specprobe = "probe",
 }
 
 local function setBackdrop(frame, background, border)
@@ -42,38 +115,140 @@ local function getFitScale(profile)
     return math.max(0.65, math.min(requested, fit))
 end
 
-local function preparePane(frame, parent, point, relativePoint, x)
-    frame:SetParent(parent)
-    frame:ClearAllPoints()
-    frame:SetPoint(point, parent, relativePoint, x, -HEADER_HEIGHT)
-    frame:SetScale(1)
-    frame:SetHeight(PANE_HEIGHT)
-    frame:SetMovable(false)
-    frame:SetClampedToScreen(false)
-    frame:SetScript("OnDragStart", nil)
-    frame:SetScript("OnDragStop", nil)
-    frame:SetFrameLevel(parent:GetFrameLevel() + 2)
-    if frame.dragBar then frame.dragBar:Hide() end
-    if frame.close then frame.close:Hide() end
-    if frame.lock then frame.lock:Hide() end
-    if frame.resizeGrip then frame.resizeGrip:Hide() end
-    if frame.scaleText then frame.scaleText:Hide() end
+local function normalizeTab(key)
+    key = string.lower(tostring(key or "plans"))
+    return TAB_ALIASES[key] or key
+end
+
+local function getTab(key)
+    key = normalizeTab(key)
+    for _, definition in ipairs(TABS) do
+        if definition.key == key then return definition end
+    end
+    return nil
+end
+
+local function hasPanel(definition)
+    if definition.key == "plans" then
+        return ARC.BundleConfig and ARC.BundleConfig.frame
+            and ARC.CommanderConfig and ARC.CommanderConfig.frame
+    end
+    local module = definition.module and ARC[definition.module]
+    return module and module.frame
+end
+
+local function canUse(definition)
+    return not definition.officer or ARC:HasConfigurationAuthority()
+end
+
+local function preparePanel(panel, parent, point, relativeTo, relativePoint, x, y)
+    panel:SetParent(parent)
+    panel:ClearAllPoints()
+    panel:SetPoint(point, relativeTo, relativePoint, x or 0, y or 0)
+    panel:SetScale(1)
+    panel:SetMovable(false)
+    panel:SetClampedToScreen(false)
+    panel:SetScript("OnDragStart", nil)
+    panel:SetScript("OnDragStop", nil)
+    panel:SetFrameStrata(parent:GetFrameStrata())
+    panel:SetFrameLevel(parent:GetFrameLevel() + 2)
+    if panel.dragBar then panel.dragBar:Hide() end
+    if panel.close then panel.close:Hide() end
+    if panel.lock then panel.lock:Hide() end
+    if panel.resizeGrip then panel.resizeGrip:Hide() end
+    if panel.scaleText then panel.scaleText:Hide() end
+end
+
+function OfficerConfig:HidePanels()
+    for _, definition in ipairs(TABS) do
+        if definition.key == "plans" then
+            if ARC.BundleConfig and ARC.BundleConfig.frame then ARC.BundleConfig.frame:Hide() end
+            if ARC.CommanderConfig and ARC.CommanderConfig.frame then
+                ARC.CommanderConfig.frame:Hide()
+            end
+        elseif definition.module then
+            local module = ARC[definition.module]
+            if module and module.frame then module.frame:Hide() end
+        end
+    end
+end
+
+function OfficerConfig:RefreshTabs()
+    local prior
+    for _, definition in ipairs(TABS) do
+        local button = self.tabButtons[definition.key]
+        local visible = hasPanel(definition) and canUse(definition)
+        if visible then
+            button:ClearAllPoints()
+            if prior then
+                button:SetPoint("LEFT", prior, "RIGHT", 5, 0)
+            else
+                button:SetPoint("TOPLEFT", self.frame, "TOPLEFT", 14, -43)
+            end
+            button:Show()
+            if definition.key == self.activeTab then button:Disable() else button:Enable() end
+            prior = button
+        else
+            button:Hide()
+        end
+    end
 end
 
 function OfficerConfig:Refresh()
-    if ARC.BundleConfig and ARC.BundleConfig.Refresh then ARC.BundleConfig:Refresh() end
-    if ARC.CommanderConfig and ARC.CommanderConfig.Refresh then
-        ARC.CommanderConfig:Refresh()
+    if self.activeTab == "plans" then
+        if ARC.BundleConfig and ARC.BundleConfig.Refresh then ARC.BundleConfig:Refresh() end
+        if ARC.CommanderConfig and ARC.CommanderConfig.Refresh then
+            ARC.CommanderConfig:Refresh()
+        end
+        return
     end
+    local definition = getTab(self.activeTab)
+    local module = definition and definition.module and ARC[definition.module]
+    if not module then return end
+    if module.Refresh then module:Refresh()
+    elseif module.RefreshPanel then module:RefreshPanel()
+    elseif module.RefreshHeader then module:RefreshHeader() end
+end
+
+function OfficerConfig:ShowPanel(key)
+    local definition = getTab(key)
+    if not definition or not hasPanel(definition) then return false end
+    if definition.officer and not ARC:RequireConfigurationAuthority() then return false end
+
+    self:HidePanels()
+    self.activeTab = definition.key
+    self.frame.subtitle:SetText(definition.description)
+
+    if definition.key == "plans" then
+        local bundleFrame = ARC.BundleConfig.frame
+        local commandFrame = ARC.CommanderConfig.frame
+        preparePanel(bundleFrame, self.content, "LEFT", self.content, "LEFT", 5, 0)
+        preparePanel(commandFrame, self.content, "RIGHT", self.content, "RIGHT", -5, 0)
+        bundleFrame:SetHeight(602)
+        commandFrame:SetHeight(602)
+        ARC.CommanderConfig.listPanel:SetHeight(380)
+        bundleFrame.title:SetText("1. Cooldown Bundle Builder")
+        bundleFrame.subtitle:SetText(
+            "New Bundle -> choose cooldowns -> Create Bundle. Edit with Save Changes.")
+        commandFrame.title:SetText("2. Commander Button Builder")
+        commandFrame.subtitle:SetText(
+            "Choose stages plus an Enabled, Disabled, or Error-on-press behavior.")
+        bundleFrame:Show()
+        commandFrame:Show()
+        self.divider:Show()
+    else
+        local module = ARC[definition.module]
+        preparePanel(module.frame, self.content, "CENTER", self.content, "CENTER", 0, 0)
+        module.frame:Show()
+        self.divider:Hide()
+    end
+
+    self:RefreshTabs()
+    self:Refresh()
+    return true
 end
 
 function OfficerConfig:Initialize()
-    local bundleFrame = ARC.BundleConfig and ARC.BundleConfig.frame
-    local commandFrame = ARC.CommanderConfig and ARC.CommanderConfig.frame
-    if not bundleFrame or not commandFrame then
-        error("bundle and command editors must initialize before OfficerConfig")
-    end
-
     local profile = ARC.db.profile.officerConfigUI
     local frame = CreateFrame("Frame", "ActuallyARCOfficerConfigFrame", UIParent)
     frame:SetWidth(FRAME_WIDTH)
@@ -95,7 +270,7 @@ function OfficerConfig:Initialize()
     frame.dragBar = CreateFrame("Frame", nil, frame)
     frame.dragBar:SetPoint("TOPLEFT", frame, "TOPLEFT", 4, -4)
     frame.dragBar:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -42, -4)
-    frame.dragBar:SetHeight(50)
+    frame.dragBar:SetHeight(35)
     frame.dragBar:EnableMouse(true)
     frame.dragBar:RegisterForDrag("LeftButton")
     frame.dragBar:SetScript("OnDragStart", function() frame:StartMoving() end)
@@ -106,81 +281,94 @@ function OfficerConfig:Initialize()
 
     frame.title = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
     frame.title:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -12)
-    frame.title:SetText("Actually Raid Cooldowns - Officer Configuration - "
+    frame.title:SetText("Actually Raid Cooldowns - ARC Console - "
         .. ARC.Constants.WIP_TEXT)
     frame.title:SetTextColor(0.92, 0.96, 1.00)
-
-    frame.subtitle = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    frame.subtitle:SetPoint("TOPLEFT", frame.title, "BOTTOMLEFT", 0, -5)
-    frame.subtitle:SetText(
-        "1. Build reusable cooldown bundles    2. Assemble bundles into commander buttons")
-    frame.subtitle:SetTextColor(0.48, 0.72, 0.84)
-
-    frame.behavior = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    frame.behavior:SetPoint("TOPLEFT", frame.subtitle, "BOTTOMLEFT", 0, -5)
-    frame.behavior:SetWidth(FRAME_WIDTH - 32)
-    frame.behavior:SetJustifyH("LEFT")
-    frame.behavior:SetText(
-        "Choose spells; ARC chooses ready players and queues multiple prompts per player. "
-        .. "By default, a command advances after any successful cooldown and loops after its final stage.")
-    frame.behavior:SetTextColor(0.72, 0.80, 0.88)
 
     frame.close = CreateFrame("Button", nil, frame, "UIPanelCloseButton")
     frame.close:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -3, -3)
     frame.close:SetScript("OnClick", function() OfficerConfig:Hide() end)
 
-    preparePane(bundleFrame, frame, "TOPLEFT", "TOPLEFT", 8)
-    preparePane(commandFrame, frame, "TOPRIGHT", "TOPRIGHT", -8)
+    frame.subtitle = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    frame.subtitle:SetPoint("TOPLEFT", frame, "TOPLEFT", 16, -73)
+    frame.subtitle:SetWidth(FRAME_WIDTH - 32)
+    frame.subtitle:SetJustifyH("LEFT")
+    frame.subtitle:SetTextColor(0.48, 0.72, 0.84)
 
-    bundleFrame.title:SetText("1. Cooldown Bundle Builder")
-    bundleFrame.subtitle:SetText(
-        "New Bundle -> choose cooldowns -> Create Bundle. Edit with Save Changes.")
-    commandFrame.title:SetText("2. Commander Button Builder")
-    commandFrame.subtitle:SetText(
-        "Choose stages plus an Enabled, Disabled, or Error-on-press behavior.")
+    self.content = CreateFrame("Frame", nil, frame)
+    self.content:SetPoint("TOPLEFT", frame, "TOPLEFT", 8, -CONTENT_TOP)
+    self.content:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -8, 8)
 
-    commandFrame:SetHeight(PANE_HEIGHT)
-    ARC.CommanderConfig.listPanel:SetHeight(380)
+    self.tabButtons = {}
+    for _, definition in ipairs(TABS) do
+        local tabKey = definition.key
+        local button = CreateFrame("Button", nil, frame, "UIPanelButtonTemplate")
+        button:SetWidth(definition.width)
+        button:SetHeight(24)
+        button:SetText(definition.label)
+        button:SetScript("OnClick", function() OfficerConfig:Show(tabKey) end)
+        self.tabButtons[tabKey] = button
+    end
 
-    frame.divider = frame:CreateTexture(nil, "ARTWORK")
-    frame.divider:SetWidth(1)
-    frame.divider:SetPoint("TOP", frame, "TOP", -6, -88)
-    frame.divider:SetPoint("BOTTOM", frame, "BOTTOM", -6, 16)
-    frame.divider:SetTexture("Interface\\Buttons\\WHITE8X8")
-    frame.divider:SetVertexColor(0.20, 0.56, 0.78, 0.55)
+    self.divider = self.content:CreateTexture(nil, "ARTWORK")
+    self.divider:SetWidth(1)
+    self.divider:SetPoint("TOP", self.content, "TOP", -6, -40)
+    self.divider:SetPoint("BOTTOM", self.content, "BOTTOM", -6, 40)
+    self.divider:SetTexture("Interface\\Buttons\\WHITE8X8")
+    self.divider:SetVertexColor(0.20, 0.56, 0.78, 0.55)
 
-    bundleFrame:Show()
-    commandFrame:Show()
+    frame:SetScript("OnHide", function() OfficerConfig:HidePanels() end)
+    self.activeTab = ARC:HasConfigurationAuthority() and "plans" or "diagnostics"
+    self:RefreshTabs()
     frame:Hide()
 end
 
 function OfficerConfig:Show(focus)
-    if not ARC:RequireConfigurationAuthority() then return false end
-    self.focus = focus or self.focus or "plans"
-    if ARC.BundleConfig and ARC.BundleConfig.frame then ARC.BundleConfig.frame:Show() end
-    if ARC.CommanderConfig and ARC.CommanderConfig.frame then
-        ARC.CommanderConfig.frame:Show()
+    local definition = getTab(focus or self.activeTab)
+    if definition and definition.officer and not ARC:HasConfigurationAuthority() then
+        ARC:RequireConfigurationAuthority()
+        return false
     end
-    self:Refresh()
+    if not definition or not hasPanel(definition) then
+        definition = getTab(ARC:HasConfigurationAuthority() and "plans" or "diagnostics")
+    end
+    if not definition or not hasPanel(definition) then
+        ARC:Print("ARC console panel unavailable; fully restart the game client")
+        return false
+    end
+    if definition.officer and not ARC:RequireConfigurationAuthority() then return false end
+    if not self:ShowPanel(definition.key) then return false end
     self.frame:Show()
     return true
 end
 
 function OfficerConfig:Hide()
     if not self.frame then return end
-    if ARC.BundleConfig and ARC.BundleConfig.nameBox then
-        ARC.BundleConfig.nameBox:ClearFocus()
-    end
-    if ARC.CommanderConfig and ARC.CommanderConfig.nameBox then
-        ARC.CommanderConfig.nameBox:ClearFocus()
+    for _, moduleName in ipairs({
+        "BundleConfig", "CommanderConfig", "ComboConfig", "SpellConfig",
+        "Diagnostics", "SpoofTest", "SpecAPIProbe",
+    }) do
+        local module = ARC[moduleName]
+        if module and module.nameBox then module.nameBox:ClearFocus() end
+        if module and module.searchBox then module.searchBox:ClearFocus() end
+        if module and module.search then module.search:ClearFocus() end
     end
     self.frame:Hide()
 end
 
 function OfficerConfig:Toggle(focus)
-    if self.frame:IsShown() then
+    local key = normalizeTab(focus or self.activeTab)
+    if self.frame:IsShown() and self.activeTab == key then
         self:Hide()
         return false
     end
-    return self:Show(focus)
+    return self:Show(key)
+end
+
+function OfficerConfig:IsHosting(key)
+    return self.frame and self.frame:IsShown() and self.activeTab == normalizeTab(key)
+end
+
+function OfficerConfig:IsPublicTab()
+    return self:IsHosting("diagnostics") or self:IsHosting("probe")
 end

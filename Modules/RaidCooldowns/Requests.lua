@@ -16,12 +16,14 @@ function Automation:Initialize()
     self.lease = nil
     self.leaseCounter = 0
     self.nextLeaseHeartbeat = 0
+    self.leaseSequences = {}
     self.initialized = true
 end
 
 function Automation:HasWork()
     return (ARC.Requests and ARC.Requests.outgoing)
         or (ARC.Bundles and ARC.Bundles.active)
+        or (ARC.Combos and (ARC.Combos.active or ARC.Combos.pendingComboID))
 end
 
 function Automation:HasLocalLease()
@@ -41,6 +43,9 @@ function Automation:CancelLocalWork(reason)
     end
     if ARC.Bundles and ARC.Bundles.active then
         ARC.Bundles:CancelActive(reason or "another commander took control", true)
+    end
+    if ARC.Combos and ARC.Combos.active then
+        ARC.Combos:CancelActive(reason or "another commander took control", true)
     end
 end
 
@@ -95,7 +100,19 @@ function Automation:AbortProvisionalAcquire()
     return true
 end
 
-function Automation:OnLeaseClaim(identity, token, duration)
+function Automation:AcceptLeaseSequence(identity, session, sequence)
+    if session == nil or sequence == nil then return true end
+    self.leaseSequences = self.leaseSequences or {}
+    local previous = self.leaseSequences[identity.key]
+    if previous and previous.session == session and sequence <= previous.sequence then
+        return false
+    end
+    self.leaseSequences[identity.key] = { session = session, sequence = sequence }
+    return true
+end
+
+function Automation:OnLeaseClaim(identity, token, duration, session, sequence)
+    if not self:AcceptLeaseSequence(identity, session, sequence) then return false end
     if not ARC.Roster:IsCoordinator(identity) then return false end
     local now = ARC:Now()
     local selfKey = ARC.Roster:GetPlayer()
@@ -120,7 +137,8 @@ function Automation:OnLeaseClaim(identity, token, duration)
     return false
 end
 
-function Automation:OnLeaseHold(identity, token, duration)
+function Automation:OnLeaseHold(identity, token, duration, session, sequence)
+    if not self:AcceptLeaseSequence(identity, session, sequence) then return false end
     if not ARC.Roster:IsCoordinator(identity) then return false end
     local now = ARC:Now()
     local selfKey = ARC.Roster:GetPlayer()
@@ -159,6 +177,13 @@ function Automation:OnLeaseHold(identity, token, duration)
             for _, itemID in ipairs(remove) do ARC.Bundles:RemoveIncoming(itemID, true) end
             if not ARC.Bundles.activeIncomingID then ARC.Bundles:ActivateNext() end
         end
+        if ARC.Combos and ARC.Combos.incoming then
+            local remove = {}
+            for actionID, incoming in pairs(ARC.Combos.incoming) do
+                if incoming.leaseToken == replacedToken then table.insert(remove, actionID) end
+            end
+            for _, actionID in ipairs(remove) do ARC.Combos:RemoveIncoming(actionID) end
+        end
     end
     if lostLocal then self:CancelLocalWork("another coordinator won the command lease") end
     return true
@@ -183,7 +208,8 @@ function Automation:ReleaseLease(silent)
     end
 end
 
-function Automation:OnLeaseRelease(identity, token)
+function Automation:OnLeaseRelease(identity, token, session, sequence)
+    if not self:AcceptLeaseSequence(identity, session, sequence) then return false end
     if not ARC.Roster:IsCoordinator(identity) then return end
     local lease = self.lease
     if lease and lease.ownerKey == identity.key and lease.token == token then
@@ -275,7 +301,7 @@ function Automation:ClearObservedForPlayer(targetKey, reportedSpells)
     if not next(observed) then self.observed[targetKey] = nil end
 end
 
-function Automation:FindCandidate(spellID, preferredKey, attempted, simulatedLoad)
+function Automation:GetCandidates(spellID, preferredKey, attempted, simulatedLoad, acceptCandidate)
     attempted = attempted or {}
     simulatedLoad = simulatedLoad or {}
     local now = ARC:Now()
@@ -283,7 +309,8 @@ function Automation:FindCandidate(spellID, preferredKey, attempted, simulatedLoa
     for playerKey, player in pairs(ARC.State.players or {}) do
         if not attempted[playerKey]
             and ARC.Requests:IsEligible(playerKey, spellID)
-            and not self:IsReserved(playerKey, spellID) then
+            and not self:IsReserved(playerKey, spellID)
+            and (not acceptCandidate or acceptCandidate(playerKey, player)) then
             local failureUntil = self.failures[playerKey]
                 and self.failures[playerKey][spellID] or 0
             local score = (self:GetLoad(playerKey) + (simulatedLoad[playerKey] or 0)) * 100
@@ -302,6 +329,12 @@ function Automation:FindCandidate(spellID, preferredKey, attempted, simulatedLoa
         if left.name ~= right.name then return left.name < right.name end
         return tostring(left.key) < tostring(right.key)
     end)
+    return candidates
+end
+
+function Automation:FindCandidate(spellID, preferredKey, attempted, simulatedLoad, acceptCandidate)
+    local candidates = self:GetCandidates(
+        spellID, preferredKey, attempted, simulatedLoad, acceptCandidate)
     return candidates[1] and candidates[1].key or nil
 end
 
@@ -327,6 +360,7 @@ function Automation:WasUsedAfterAssignment(spell, assignedAt, assignedCharges)
 end
 
 function Automation:OnUpdate(now)
+    if not self.lease and not next(self.reservations) and not next(self.observed) then return end
     for attemptID, value in pairs(self.reservations) do
         if (value.expiresAt or 0) <= now then self.reservations[attemptID] = nil end
     end
@@ -374,6 +408,13 @@ function Automation:OnRosterChanged()
             end
             for _, itemID in ipairs(remove) do ARC.Bundles:RemoveIncoming(itemID, true) end
             if not ARC.Bundles.activeIncomingID then ARC.Bundles:ActivateNext() end
+        end
+        if ARC.Combos and ARC.Combos.incoming then
+            local remove = {}
+            for actionID, incoming in pairs(ARC.Combos.incoming) do
+                if incoming.leaseToken == oldToken then table.insert(remove, actionID) end
+            end
+            for _, actionID in ipairs(remove) do ARC.Combos:RemoveIncoming(actionID) end
         end
     end
 end
@@ -462,6 +503,10 @@ function Requests:Start(playerKey, spellID, leaseReady)
         ARC:Print("cancel the active cooldown bundle before making a single request")
         return false
     end
+    if ARC.Combos and (ARC.Combos.active or ARC.Combos.pendingComboID) then
+        ARC:Print("cancel the active timed combo before making a single request")
+        return false
+    end
     if not leaseReady and not ARC.Automation:HasLocalLease() then
         return ARC.Automation:Acquire(function(acquired)
             if acquired then Requests:Start(playerKey, spellID, true) end
@@ -507,6 +552,18 @@ function Requests:Assign(playerKey, reason)
     request.leaseToken = request.leaseToken or ARC.Automation:GetLeaseToken()
     ARC.Automation:Reserve(request.attemptID, ARC.Roster:GetPlayer(), playerKey,
         request.spellID, request.deadline + ARC.Constants.USE_SYNC_TIMEOUT, "single")
+    if ARC.Activity and ARC.Activity.initialized then
+        ARC.Activity:BeginAttempt({
+            attemptID = request.attemptID,
+            kind = "single",
+            context = "Single request",
+            contextID = request.id,
+            playerKey = playerKey,
+            spellID = request.spellID,
+            startedAt = request.assignedAt,
+            deadline = request.deadline,
+        })
+    end
 
     local target = ARC.State.players[playerKey]
     ARC:Print("requesting " .. ARC.SpellInfo:ResolveSpellName(request.spellID)
@@ -544,6 +601,10 @@ function Requests:Failover(reason)
     local request = self.outgoing
     if not request then return false end
     local oldTarget = request.targetKey
+    if ARC.Activity and ARC.Activity.initialized then
+        ARC.Activity:FailAttempt(request.attemptID, reason,
+            request.status == "ACK" or request.promptedAt ~= nil)
+    end
     request.history[oldTarget] = {
         attemptID = request.attemptID,
         expiresAt = ARC:Now() + ARC.Constants.LATE_CAST_GRACE,
@@ -569,6 +630,19 @@ function Requests:Complete(playerKey, source)
     local prior = request.history and request.history[playerKey]
     if request.targetKey ~= playerKey
         and (not prior or (prior.expiresAt or 0) < ARC:Now()) then return false end
+    if ARC.Activity and ARC.Activity.initialized then
+        local late = request.targetKey ~= playerKey and prior
+        ARC.Activity:FinishAttempt(late and prior.attemptID or request.attemptID,
+            late and "LATE" or "ON_TIME", {
+                playerKey = playerKey,
+                source = source,
+                reason = late and "responded after ARC assigned a fallback" or nil,
+            })
+        if late then
+            ARC.Activity:CancelAttempt(request.attemptID,
+                "fulfilled by late response from " .. playerShortName(ARC.State.players[playerKey]))
+        end
+    end
     self:CancelAssignment(request, request.targetKey)
     ARC.Automation:RecordSuccess(playerKey, request.spellID)
     ARC:Print(playerShortName(ARC.State.players[playerKey]) .. " used "
@@ -584,6 +658,9 @@ end
 function Requests:CancelOutgoing(reason, leaseLost)
     local request = self.outgoing
     if not request then return false end
+    if ARC.Activity and ARC.Activity.initialized then
+        ARC.Activity:CancelAttempt(request.attemptID, reason)
+    end
     self:CancelAssignment(request, request.targetKey)
     self.outgoing = nil
     ARC.Comms:SendUseEnd(request.id, request.leaseToken)
@@ -650,7 +727,8 @@ function Requests:OnRemoteRequest(requester, session, sequence, requestID, attem
         self:SendStatus("ACK")
         return
     end
-    if self.incoming or (ARC.Bundles and next(ARC.Bundles.incoming or {})) then
+    if self.incoming or (ARC.Bundles and next(ARC.Bundles.incoming or {}))
+        or (ARC.Combos and next(ARC.Combos.incoming or {})) then
         ARC.Comms:SendUseStatus(requestID, attemptID, leaseToken, "BUSY", spellID)
         return
     end
@@ -697,7 +775,13 @@ function Requests:OnRemoteStatus(identity, session, sequence, requestID, attempt
     if status == "ACK" then
         local firstAck = request.status ~= "ACK"
         request.status = "ACK"
-        if firstAck then request.deadline = ARC:Now() + request.timeout end
+        if firstAck then
+            request.promptedAt = ARC:Now()
+            request.deadline = request.promptedAt + request.timeout
+            if ARC.Activity and ARC.Activity.initialized then
+                ARC.Activity:MarkPrompted(request.attemptID, request.promptedAt)
+            end
+        end
         ARC.Renderer:MarkDirty("request acknowledged")
     elseif status == "CAST" then
         self:Complete(identity.key, "confirmed")
@@ -783,6 +867,7 @@ end
 
 function Requests:OnUpdate(now)
     if not self.initialized then return end
+    if not self.outgoing and not self.incoming then return end
     local request = self.outgoing
     if request then
         local target = ARC.State.players[request.targetKey]

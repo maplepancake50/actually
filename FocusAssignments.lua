@@ -1,6 +1,8 @@
 Actually = Actually or {}
 local Addon = Actually
 
+-- Legacy dormant prototype. Core intentionally does not initialize this
+-- module; keep it isolated until the feature is deliberately revived.
 local FocusAssignments = {}
 Addon.FocusAssignments = FocusAssignments
 
@@ -425,7 +427,8 @@ end
 
 function FocusAssignments:OnUpdate(elapsed)
     self.updateElapsed = (self.updateElapsed or 0) + elapsed
-    if self.updateElapsed < 0.25 then return end
+    local activeWork = self.scheduledBroadcastAt or next(self.pendingAcks or {})
+    if self.updateElapsed < (activeWork and 0.25 or 1) then return end
     self.updateElapsed = 0
     local now = GetTime and GetTime() or 0
     if self.scheduledBroadcastAt and now >= self.scheduledBroadcastAt then

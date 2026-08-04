@@ -82,16 +82,34 @@ end
 
 function Official:GetPlayerIdentity()
     local name = UnitName("player") or "Unknown"
+    if self.cachedPlayerIdentity and self.cachedPlayerName == name then
+        return self.cachedPlayerIdentity
+    end
     local realm = GetRealmName and GetRealmName()
     if realm and realm ~= "" then
         realm = string.gsub(realm, "%s+", "")
-        return name .. "-" .. realm
+        local identity = name .. "-" .. realm
+        if name ~= "Unknown" then
+            self.cachedPlayerName = name
+            self.cachedPlayerIdentity = identity
+            self.cachedPlayerKey = nil
+        end
+        return identity
     end
+    -- ADDON_LOADED can run before realm data is ready. Return the temporary
+    -- short identity without caching it so a later call can qualify the realm.
     return name
 end
 
 function Official:GetPlayerKey()
-    return NormalizeIdentity(self:GetPlayerIdentity())
+    local identity = self:GetPlayerIdentity()
+    if self.cachedPlayerIdentity == identity and identity ~= "Unknown" then
+        if not self.cachedPlayerKey then
+            self.cachedPlayerKey = NormalizeIdentity(identity)
+        end
+        return self.cachedPlayerKey
+    end
+    return NormalizeIdentity(identity)
 end
 
 function Official:GetAuthority()
@@ -103,13 +121,26 @@ function Official:GetAuthority()
     authority.changeID = tostring(authority.changeID or "")
     authority.stateVersion = 1
 
-    local normalized = {}
-    for identity, enabled in pairs(authority.officers) do
-        if enabled == true then
-            normalized[NormalizeIdentity(identity)] = true
+    if self.normalizedAuthority ~= authority
+        or self.normalizedOfficers ~= authority.officers
+        or self.normalizedAuthorityRevision ~= authority.revision
+        or self.normalizedAuthorityChangeID ~= authority.changeID then
+        local normalized = {}
+        for identity, enabled in pairs(authority.officers) do
+            if enabled == true then
+                normalized[NormalizeIdentity(identity)] = true
+            end
         end
+        authority.officers = normalized
+        self.normalizedAuthority = authority
+        self.normalizedOfficers = normalized
+        self.normalizedAuthorityRevision = authority.revision
+        self.normalizedAuthorityChangeID = authority.changeID
     end
-    authority.officers = normalized
+    if self.normalizedOwnerSource ~= authority.owner then
+        self.normalizedOwnerSource = authority.owner
+        self.normalizedOwnerKey = authority.owner and NormalizeIdentity(authority.owner) or nil
+    end
     return authority
 end
 
@@ -177,19 +208,26 @@ function Official:ResolveTarget(target)
 end
 
 function Official:IsOfficer(identity)
-    identity = identity or self:GetPlayerIdentity()
-    return self:IsOfficerInAuthority(identity, self:GetAuthority())
+    local authority = self:GetAuthority()
+    if identity == nil then
+        local playerKey = self:GetPlayerKey()
+        if authority.officers[playerKey] == true then return true end
+        identity = self:GetPlayerIdentity()
+    end
+    return self:IsOfficerInAuthority(identity, authority)
 end
 
 function Official:IsOwner()
-    local owner = self:GetAuthority().owner
-    return owner and NormalizeIdentity(owner) == self:GetPlayerKey()
+    self:GetAuthority()
+    return self.normalizedOwnerKey ~= nil
+        and self.normalizedOwnerKey == self:GetPlayerKey()
 end
 
 function Official:IsLeader(identity)
-    local owner = self:GetAuthority().owner
-    identity = identity or self:GetPlayerIdentity()
-    return owner and NormalizeIdentity(owner) == NormalizeIdentity(identity)
+    self:GetAuthority()
+    if not self.normalizedOwnerKey then return false end
+    if identity == nil then return self.normalizedOwnerKey == self:GetPlayerKey() end
+    return self.normalizedOwnerKey == NormalizeIdentity(identity)
 end
 
 function Official:CheckpointCurrentBoard(authorityRevision)
@@ -217,6 +255,7 @@ function Official:AdvanceAuthority(change, action)
     authority.updatedBy = actor
     authority.changeID = Addon.Util.NewPersistentID()
     authority.stateVersion = 1
+    self.normalizedAuthorityRevision = nil
     self:CheckpointCurrentBoard(authority.revision)
     Addon.db.cacheTipsMeta = type(Addon.db.cacheTipsMeta) == "table"
         and Addon.db.cacheTipsMeta or {}
@@ -392,8 +431,11 @@ end
 function Official:HandleLeaderCommand(arguments)
     local value = Trim(arguments)
     if value == "" then
-        Addon:Print("Actually leader: " .. tostring(Addon.db.authority.owner or "none")
-            .. ". Use /actually leader <password> <player|target|me|clear>.")
+        local message = "Actually leader: " .. tostring(Addon.db.authority.owner or "none") .. "."
+        if Addon.CanViewCommandHelp and Addon:CanViewCommandHelp() then
+            message = message .. " Use /actually leader <password> <player|target|me|clear>."
+        end
+        Addon:Print(message)
         return true
     end
 
@@ -401,7 +443,11 @@ function Official:HandleLeaderCommand(arguments)
     target = Trim(target)
     local loweredTarget = string.lower(target)
     if not leaderPassword or target == "" then
-        Addon:Print("Usage: /actually leader <password> <player|target|me|clear>.")
+        if Addon.CanViewCommandHelp and Addon:CanViewCommandHelp() then
+            Addon:Print("Usage: /actually leader <password> <player|target|me|clear>.")
+        else
+            Addon:Print("Invalid leader command.")
+        end
         return true
     elseif loweredTarget == "clear" or loweredTarget == "none" or loweredTarget == "reset" then
         local previous, errorMessage = self:ClearLeader(leaderPassword)
@@ -758,6 +804,7 @@ function Official:ReceiveAuthorization(message, sender)
         authority.changeID = changeID or ""
         Addon:Print("Official edit access was revoked by " .. tostring(sender) .. ".")
     end
+    self.normalizedAuthorityRevision = nil
 
     self.pendingAuthorityTransition = {
         sender = sender,

@@ -34,7 +34,13 @@ function CombatLog:OnEvent(...)
         if ARC.Bundles and ARC.Bundles.initialized then
             ARC.Bundles:OnLocalCast(canonicalID)
         end
+        if ARC.Combos and ARC.Combos.initialized then
+            ARC.Combos:OnLocalCast(canonicalID)
+        end
         ARC.CooldownReader:OnLocalCast(canonicalID, target)
+        if ARC.Activity and ARC.Activity.initialized then
+            ARC.Activity:OnCast(ARC.Roster:GetPlayer(), canonicalID, "combat log")
+        end
         return
     end
 
@@ -47,5 +53,11 @@ function CombatLog:OnEvent(...)
     if ARC.Bundles and ARC.Bundles.initialized then
         ARC.Bundles:OnReportedCast(identity.key, canonicalID)
     end
+    if ARC.Combos and ARC.Combos.initialized then
+        ARC.Combos:OnReportedCast(identity.key, canonicalID)
+    end
     ARC.State:ObserveCast(identity.key, identity, canonicalID, target)
+    if ARC.Activity and ARC.Activity.initialized then
+        ARC.Activity:OnCast(identity.key, canonicalID, "combat log")
+    end
 end
